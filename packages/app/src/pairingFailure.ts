@@ -5,6 +5,7 @@ const messages = {
     "unsupported-protocol": "Need a ws:// or wss:// link.",
     "missing-token": "No token in that link. Run `pew2 pair` again.",
     "short-token": "Token too short. The link looks cut off.",
+    "invalid-token": "The pairing token is damaged. Scan the code again.",
     "missing-key": "That link has no encryption key. Update pew2 and run `pew2 pair`.",
     "invalid-key": "The encryption key in that link is damaged. Scan it again.",
   },

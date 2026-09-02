@@ -16,6 +16,7 @@ const cases: Array<[PairingFailure, string]> = [
   [pairingFailure.link("unsupported-protocol"), "Need a ws:// or wss:// link."],
   [pairingFailure.link("missing-token"), "No token in that link. Run `pew2 pair` again."],
   [pairingFailure.link("short-token"), "Token too short. The link looks cut off."],
+  [pairingFailure.link("invalid-token"), "The pairing token is damaged. Scan the code again."],
   [
     pairingFailure.link("missing-key"),
     "That link has no encryption key. Update pew2 and run `pew2 pair`.",

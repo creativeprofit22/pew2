@@ -13,8 +13,9 @@
 
 import { pairingFailure, type PairingFailure } from "./pairingFailure";
 
-/** The daemon's own floor. A shorter token means a tampered or truncated URL. */
+/** The daemon and relay floor. A shorter token means a tampered or truncated URL. */
 const MIN_TOKEN_LENGTH = 32;
+const RELAY_TOKEN = /^[0-9a-f]+$/i;
 
 export interface Pairing {
   /** Full URL, ready to hand to a WebSocket. */
@@ -71,13 +72,17 @@ export function parsePairing(input: string, deviceId = "phone"): ParseResult {
   // machine; a relay link carries `pairing` and points at the relay, which is
   // what makes the phone work from a mobile network.
   const relayToken = url.searchParams.get("pairing");
-  const token = url.searchParams.get("token") ?? relayToken;
+  // Presence of `pairing` selects relay routing, even when a direct token also exists.
+  const token = relayToken ?? url.searchParams.get("token");
   if (!token) {
     return { ok: false, failure: pairingFailure.link("missing-token") };
   }
   if (token.length < MIN_TOKEN_LENGTH) {
-    // The daemon would reject this anyway; failing here explains why.
+    // The daemon or relay would reject this anyway; failing here explains why.
     return { ok: false, failure: pairingFailure.link("short-token") };
+  }
+  if (relayToken !== null && !RELAY_TOKEN.test(relayToken)) {
+    return { ok: false, failure: pairingFailure.link("invalid-token") };
   }
 
   // The key rides in the fragment. Its absence means a link from a build before

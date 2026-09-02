@@ -41,6 +41,39 @@ test("accepts a relay link, and marks it as working from anywhere", () => {
   expect(result.pairing.label).toBe("relay.example.com");
 });
 
+test("rejects a long non-hex relay token before opening a socket", () => {
+  const result = parsePairing(
+    `wss://relay.example.com/connect?pairing=${"g".repeat(32)}${FRAGMENT}`,
+  );
+
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.failure.reason).toBe("invalid-token");
+});
+
+test("accepts mixed-case hexadecimal relay tokens", () => {
+  const mixedCaseHex = "aAbBcCdDeEfF00112233445566778899";
+  expect(parsePairing(`wss://relay.example.com/connect?pairing=${mixedCaseHex}${FRAGMENT}`).ok).toBe(
+    true,
+  );
+});
+
+test("keeps direct tokens length-only", () => {
+  expect(parsePairing(`ws://192.168.0.102:8787/?token=${"z".repeat(32)}${FRAGMENT}`).ok).toBe(
+    true,
+  );
+});
+
+test("validates the relay token when a link contains both token shapes", () => {
+  const result = parsePairing(
+    `wss://relay.example.com/connect?token=${"z".repeat(32)}&pairing=${"g".repeat(32)}${FRAGMENT}`,
+  );
+
+  expect(result.ok).toBe(false);
+  if (result.ok) return;
+  expect(result.failure.reason).toBe("invalid-token");
+});
+
 test("a direct link is not remote", () => {
   const result = parsePairing(`ws://192.168.0.102:8787/?token=${TOKEN}${FRAGMENT}`);
 
@@ -96,7 +129,8 @@ test("maps every link validation branch to an exact allowlisted failure", () => 
     ["ws://", "invalid-url"],
     [`http://192.168.0.102:8787/?token=${TOKEN}${FRAGMENT}`, "unsupported-protocol"],
     [`ws://192.168.0.102:8787/${FRAGMENT}`, "missing-token"],
-    [`ws://192.168.0.102:8787/?token=short${FRAGMENT}`, "short-token"],
+    [`ws://192.168.0.102:8787/?token=${"a".repeat(8)}`, "short-token"],
+    [`wss://relay.example.com/connect?pairing=${"g".repeat(32)}${FRAGMENT}`, "invalid-token"],
     [`wss://relay.example.com/connect?pairing=${TOKEN}&role=app`, "missing-key"],
     [`wss://relay.example.com/connect?pairing=${TOKEN}&role=app#nothing=here`, "missing-key"],
     [`wss://relay.example.com/connect?pairing=${TOKEN}&role=app#k=!!!!`, "invalid-key"],
