@@ -48,6 +48,7 @@ Mobile remote control for **desktop coding agents** (Claude Code, Codex, Gemini 
 
 ## Workflows
 
+- **Git identity is repo-local.** Use its configured `user.name` and `user.email` with the authenticated `gh` CLI account for commits and pushes; do not ask again.
 - **`npm run daemon` is not the server** — it prints JSON and exits. The WebSocket server the app talks to is `bun run packages/daemon/src/server.ts` (8787, `PEW2_PORT`). The `echo` provider is a real ACP agent needing no key or network — the only offline way to exercise the pipeline.
 - **Live loop:** start that server, then `cd packages/app && npx expo run:ios`, scan the printed QR. **Expo Go can no longer load this app** (keyboard-controller, glass, picker, speech are native). After `npx expo install`, **restart Metro** — a stale graph reads as a module missing at runtime.
 - **A `Sheet`-based harness renders blank on `expo start --web`** — `WorkletsError: createSerializableObject should never be called in JSWorklets`, and it takes the whole tree with it (`NewChatSheet.harness`, `MessageSheet.harness`; `ChatThread.harness` is unaffected). Run those with `npx expo run:ios`, and relaunch between screenshots: fast refresh keeps state, so an edited fixture never moves and the card is caught mid-spring.
