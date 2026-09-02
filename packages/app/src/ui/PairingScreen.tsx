@@ -27,6 +27,11 @@ import { QrScanner } from "./QrScanner";
 import { CircleButton } from "./controls";
 import { Glass } from "./Glass";
 import { verifyPairing } from "../verifyPairing";
+import {
+  formatPairingFailure,
+  recordPairingFailure,
+  type PairingFailure,
+} from "../pairingFailure";
 
 interface Props {
   onPaired: (pairing: Pairing) => void;
@@ -39,8 +44,8 @@ interface Props {
 export function PairingScreen({ onPaired, onBack, notice }: Props) {
   const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [scanError, setScanError] = useState<string | null>(null);
+  const [error, setError] = useState<PairingFailure | null>(null);
+  const [scanError, setScanError] = useState<PairingFailure | null>(null);
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -48,14 +53,14 @@ export function PairingScreen({ onPaired, onBack, notice }: Props) {
   // button there would be a dead end.
   const canScan = Platform.OS === "ios" || Platform.OS === "android";
 
-  const accept = async (value: string): Promise<string | null> => {
+  const accept = async (value: string): Promise<PairingFailure | null> => {
     // The relay refuses a connection with no device id, so it is resolved
     // before the link is stored rather than at connect time.
     const result = parsePairing(value, await deviceId());
     if (!result.ok) {
       // Validate before storing: a bad link would otherwise surface much later
       // as a socket that silently never connects.
-      return result.error;
+      return result.failure;
     }
 
     // Shape is not proof. A retired token parses exactly like a live one, and
@@ -65,7 +70,7 @@ export function PairingScreen({ onPaired, onBack, notice }: Props) {
     // from the daemon, 409 from the relay for a room with no machine in it), so
     // the only way to know is to complete a handshake.
     const verified = await verifyPairing(result.pairing);
-    if (!verified.ok) return verified.message;
+    if (!verified.ok) return verified.failure;
 
     onPaired(result.pairing);
     return null;
@@ -77,8 +82,10 @@ export function PairingScreen({ onPaired, onBack, notice }: Props) {
     const failure = await accept(draft);
     // Pairing is the one moment the user is asked to trust this thing, so both
     // outcomes are confirmed physically rather than by a line of text alone.
-    if (failure) haptics.failed();
-    else haptics.finished();
+    if (failure) {
+      recordPairingFailure(failure);
+      haptics.failed();
+    } else haptics.finished();
     setError(failure);
     if (failure) setBusy(false);
   };
@@ -93,13 +100,11 @@ export function PairingScreen({ onPaired, onBack, notice }: Props) {
       setScanning(false);
       return;
     }
+    recordPairingFailure(failure);
     haptics.failed();
     // Stay on the camera and say why, rather than dumping the user back to a
     // form with an error about a code they can no longer see.
     setScanError(failure);
-    // Put the scanned text in the field too, so it can be corrected by hand if
-    // the code was damaged or partly obscured.
-    setDraft(value);
   };
 
   return (
@@ -191,7 +196,7 @@ export function PairingScreen({ onPaired, onBack, notice }: Props) {
 
       {error ? (
         <Text style={styles.error} accessibilityLiveRegion="polite">
-          {error}
+          {formatPairingFailure(error)}
         </Text>
       ) : null}
 
@@ -220,7 +225,7 @@ export function PairingScreen({ onPaired, onBack, notice }: Props) {
 
       <QrScanner
         visible={scanning}
-        error={scanError}
+        error={scanError ? formatPairingFailure(scanError) : null}
         busy={busy}
         onScan={(value) => void handleScan(value)}
         onClose={() => {

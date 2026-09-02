@@ -68,6 +68,7 @@ import { projectsForProvider, projectSourceKey } from "./src/projects";
 import { greetingFor, hashSeed } from "./src/greeting";
 import { showsStop } from "./src/composerState";
 import { ConfigPicker, summarise, valueName } from "./src/ui/ConfigPicker";
+import { formatPairingFailure } from "./src/pairingFailure";
 import { useReducedMotion } from "./src/ui/useReducedMotion";
 import { CanvasCover } from "./src/ui/CanvasCover";
 import { withLayoutX, type PillX } from "./src/ui/pillAnchor";
@@ -1412,9 +1413,9 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
                     anyway from wherever the user is standing. What can be done
                     from here is keep typing, which the composer now says. */}
                 {daemon.fatal
-                  ? daemon.fatal
+                  ? formatPairingFailure(daemon.fatal)
                   : daemon.unreachable
-                    ? "Can't reach your machine."
+                    ? formatPairingFailure(daemon.unreachable)
                     : daemon.status !== "online"
                       ? "Connecting to your machine..."
                       : active

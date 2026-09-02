@@ -215,14 +215,14 @@ test("installing registers the task and starts it without waiting for a logon", 
   expect(status.state).toBe("running");
 });
 
-test("the task file is written as Unicode, which schtasks requires", async () => {
+test("the task file is written as UTF-16LE, which schtasks requires", async () => {
   const home = await mkdtemp(join(tmpdir(), "pew2-task-"));
   await installScheduledTask({ home }, recorder());
 
-  // A plain UTF-8 file is rejected with a bare "The task XML is malformed".
-  // Read as bytes: `.text()` decodes and strips the very mark being asserted.
+  // The XML declaration says UTF-16, so the bytes must match it.
   const bytes = new Uint8Array(await Bun.file(taskXmlPath(home)).arrayBuffer());
-  expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf]);
+  expect([bytes[0], bytes[1]]).toEqual([0xff, 0xfe]);
+  expect(new TextDecoder("utf-16le").decode(bytes)).toStartWith("<?xml");
 });
 
 test("a task that was never created reads as not-installed", async () => {

@@ -244,7 +244,9 @@ export class RelayClient {
         // rather than dismissed as unpaired — different problems, different fixes.
         const mismatch = wire.wireMismatch(hello.wire);
         if (mismatch) {
-          socket.send(JSON.stringify({ t: "error", code: "wire-version", message: mismatch }));
+          socket.send(
+            JSON.stringify({ t: "error", code: "wire-version", deviceId, message: mismatch }),
+          );
           return;
         }
         // A `hello` is a new socket, and the peer's counters restart at zero

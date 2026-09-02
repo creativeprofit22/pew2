@@ -327,6 +327,26 @@ test("a relay client with no local listener is still handled", async () => {
   relay.stop();
 });
 
+test("a wire-version refusal targets the app whose hello mismatched", async () => {
+  const { relay } = client();
+  relay.start();
+  const socket = FakeSocket.instances[0]!;
+  socket.open();
+
+  socket.receive({
+    t: "hello",
+    wire: WIRE_VERSION - 1,
+    role: "app",
+    deviceId: "outdated-phone",
+  });
+
+  const refusal = socket.sent
+    .map((raw) => JSON.parse(raw) as { t?: string; code?: string; deviceId?: string })
+    .find((frame) => frame.t === "error" && frame.code === "wire-version");
+  expect(refusal?.deviceId).toBe("outdated-phone");
+  relay.stop();
+});
+
 test("a malformed or unsealed frame is dropped, not answered", async () => {
   // Answering would be a favour to a stranger. Nothing here has proved it holds
   // the pairing key, so a reply would confirm the room is live and leak the

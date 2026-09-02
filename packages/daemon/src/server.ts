@@ -257,16 +257,16 @@ const server = Bun.serve({
           cursors?: unknown;
         };
 
+        const deviceId = typeof hello.deviceId === "string" ? hello.deviceId : "";
         // Checked before the proof, so a client too old to *have* a proof is
         // told to update rather than silently refused as unauthenticated.
         const mismatch = wire.wireMismatch(hello.wire);
         if (mismatch) {
-          sendPlain(ws, { t: "error", code: "wire-version", message: mismatch });
+          sendPlain(ws, { t: "error", code: "wire-version", deviceId, message: mismatch });
           ws.close(1002, "protocol version");
           return;
         }
 
-        const deviceId = typeof hello.deviceId === "string" ? hello.deviceId : "";
         if (!deviceId || !client.channel.verifyProof(hello.proof, deviceId)) {
           sendPlain(ws, {
             t: "error",

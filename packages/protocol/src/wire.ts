@@ -685,6 +685,7 @@ export const ErrorMessage = z.object({
   code: z.string(),
   message: z.string(),
   sessionId: z.string().optional(),
+  deviceId: z.string().optional(),
 });
 
 /**

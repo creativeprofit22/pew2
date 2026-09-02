@@ -50,26 +50,29 @@ test("usable agents come first, whatever order they arrived in", () => {
   expect(state.items.map((i) => i.id)).toEqual(["claude-code", "opencode", "goose", "codex"]);
 });
 
-test("arrows move, and skip agents that cannot be chosen", () => {
-  // Codex is not installed. Landing on it would offer a choice that does
-  // nothing, which reads as the key being broken.
+test("arrows move through every visible agent and wrap", () => {
   let state = initialState(items);
   expect(state.items[state.cursor]!.id).toBe("claude-code");
 
-  state = reduce(state, DOWN);
-  expect(state.items[state.cursor]!.id).toBe("opencode");
+  state = reduce(state, UP);
+  expect(state.items[state.cursor]!.id).toBe("codex");
 
   state = reduce(state, DOWN);
-  expect(state.items[state.cursor]!.id).toBe("goose");
+  expect(state.items[state.cursor]!.id).toBe("claude-code");
 });
 
-test("the cursor wraps at both ends", () => {
-  let state = initialState(items);
-  state = reduce(state, UP);
-  expect(state.items[state.cursor]!.id).toBe("goose");
+test("one usable agent can still navigate the unavailable rows", () => {
+  const mostlyUnavailable = [
+    item({ id: "gemini" }),
+    item({ id: "ggcoder", selectable: false, note: "not installed" }),
+    item({ id: "codex", selectable: false, note: "not installed" }),
+  ];
+  let state = initialState(mostlyUnavailable);
 
   state = reduce(state, DOWN);
-  expect(state.items[state.cursor]!.id).toBe("claude-code");
+  expect(state.items[state.cursor]!.id).toBe("ggcoder");
+  state = reduce(state, DOWN);
+  expect(state.items[state.cursor]!.id).toBe("codex");
 });
 
 test("j and k move too", () => {
@@ -81,13 +84,10 @@ test("j and k move too", () => {
   expect(state.items[state.cursor]!.id).toBe("claude-code");
 });
 
-test("a list with nothing selectable does not hang", () => {
-  // Every row unusable means the cursor search can find no home. Looping
-  // forever here would freeze the terminal in raw mode, which takes the user's
-  // shell with it.
+test("a list with nothing selectable still navigates", () => {
   const none = [item({ id: "a", selectable: false }), item({ id: "b", selectable: false })];
   const state = reduce(initialState(none), DOWN);
-  expect(state.cursor).toBe(0);
+  expect(state.cursor).toBe(1);
 });
 
 test("an unselectable agent cannot be toggled on", () => {

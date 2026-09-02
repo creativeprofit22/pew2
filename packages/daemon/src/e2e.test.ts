@@ -98,6 +98,23 @@ test("a device the pairing does not belong to is refused, in the clear", async (
   stranger.close();
 }, TEST_TIMEOUT);
 
+test("a wire-version refusal targets the device whose hello mismatched", async () => {
+  const outdated = new WebSocket(`ws://127.0.0.1:${daemon.port}/?token=${daemon.token}`);
+  const frames: any[] = [];
+  outdated.onmessage = (event) => frames.push(JSON.parse(String(event.data)));
+
+  await new Promise<void>((resolve) => {
+    outdated.onopen = () => resolve();
+  });
+  outdated.send(
+    JSON.stringify({ t: "hello", wire: 0, role: "app", deviceId: "outdated-phone" }),
+  );
+  await Bun.sleep(100);
+
+  outdated.close();
+  expect(frames.find((frame) => frame.code === "wire-version")?.deviceId).toBe("outdated-phone");
+}, TEST_TIMEOUT);
+
 test("a sealed message from a socket that never said hello is ignored entirely", async () => {
   const silent = new WebSocket(`ws://127.0.0.1:${daemon.port}/?token=${daemon.token}`);
   const frames: any[] = [];

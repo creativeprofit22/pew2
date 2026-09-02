@@ -25,6 +25,19 @@ test("an outdated hello still parses, so its sender can be told why", () => {
   expect(parsed.success).toBe(true);
 });
 
+test("a cleartext error can target one device without breaking older frames", () => {
+  const targeted = ServerMessage.parse({
+    t: "error",
+    code: "wire-version",
+    message: "update",
+    deviceId: "phone-aaaa",
+  });
+  expect(targeted).toMatchObject({ deviceId: "phone-aaaa" });
+
+  const legacy = ServerMessage.parse({ t: "error", code: "unpaired", message: "pair again" });
+  expect((legacy as { deviceId?: string }).deviceId).toBeUndefined();
+});
+
 test("a version mismatch names which side is behind", () => {
   // "Update the app" and "update pew2 on your computer" are different actions,
   // and sending someone after the wrong one wastes their evening.

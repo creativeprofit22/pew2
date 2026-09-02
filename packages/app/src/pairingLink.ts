@@ -11,6 +11,8 @@
  * nothing happened.
  */
 
+import { pairingFailure, type PairingFailure } from "./pairingFailure";
+
 /** The daemon's own floor. A shorter token means a tampered or truncated URL. */
 const MIN_TOKEN_LENGTH = 32;
 
@@ -42,7 +44,7 @@ export interface Pairing {
   key: string;
 }
 
-export type ParseResult = { ok: true; pairing: Pairing } | { ok: false; error: string };
+export type ParseResult = { ok: true; pairing: Pairing } | { ok: false; failure: PairingFailure };
 
 /**
  * @param deviceId Identifies this phone to the relay. The relay rejects a
@@ -51,19 +53,19 @@ export type ParseResult = { ok: true; pairing: Pairing } | { ok: false; error: s
  */
 export function parsePairing(input: string, deviceId = "phone"): ParseResult {
   const trimmed = input.trim();
-  if (!trimmed) return { ok: false, error: "Enter a link." };
+  if (!trimmed) return { ok: false, failure: pairingFailure.link("empty") };
 
   let url: URL;
   try {
     url = new URL(trimmed);
   } catch {
-    return { ok: false, error: "Not a valid link. Should start with ws://" };
+    return { ok: false, failure: pairingFailure.link("invalid-url") };
   }
 
   if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    return { ok: false, error: `Need a ws:// link, got ${url.protocol}//` };
+    return { ok: false, failure: pairingFailure.link("unsupported-protocol") };
   }
-  if (!url.hostname) return { ok: false, error: "Link has no address." };
+  if (!url.hostname) return { ok: false, failure: pairingFailure.link("invalid-url") };
 
   // Two shapes, one screen. A direct link carries `token` and points at the
   // machine; a relay link carries `pairing` and points at the relay, which is
@@ -71,11 +73,11 @@ export function parsePairing(input: string, deviceId = "phone"): ParseResult {
   const relayToken = url.searchParams.get("pairing");
   const token = url.searchParams.get("token") ?? relayToken;
   if (!token) {
-    return { ok: false, error: "No token in that link. Run `pew2 pair` again." };
+    return { ok: false, failure: pairingFailure.link("missing-token") };
   }
   if (token.length < MIN_TOKEN_LENGTH) {
     // The daemon would reject this anyway; failing here explains why.
-    return { ok: false, error: "Token too short. The link looks cut off." };
+    return { ok: false, failure: pairingFailure.link("short-token") };
   }
 
   // The key rides in the fragment. Its absence means a link from a build before
@@ -83,11 +85,11 @@ export function parsePairing(input: string, deviceId = "phone"): ParseResult {
   // as a comment — either way the connection could only fail later, opaquely.
   const key = new URLSearchParams(url.hash.replace(/^#/, "")).get("k");
   if (!key) {
-    return { ok: false, error: "That link has no encryption key. Update pew2 and run `pew2 pair`." };
+    return { ok: false, failure: pairingFailure.link("missing-key") };
   }
   const keyHex = hexFromBase64Url(key);
   if (!keyHex) {
-    return { ok: false, error: "The encryption key in that link is damaged. Scan it again." };
+    return { ok: false, failure: pairingFailure.link("invalid-key") };
   }
   // Never sent: a fragment is not transmitted, but clearing it keeps the key out
   // of anything that later logs or displays this URL.

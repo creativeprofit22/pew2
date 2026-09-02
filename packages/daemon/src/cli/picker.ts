@@ -51,11 +51,8 @@ export interface PickerState {
   done?: "accepted" | "cancelled";
 }
 
-/** Start the picker with everything installed already turned on. */
+/** Start with every installed agent turned on and usable agents listed first. */
 export function initialState(items: PickerItem[], disabled: Set<string> = new Set()): PickerState {
-  // Usable agents first, in the order they came in. The list is a thing to act
-  // on, and interleaving agents that cannot be picked means arrowing past rows
-  // that do nothing to reach the ones that do.
   const ordered = [
     ...items.filter((i) => i.selectable),
     ...items.filter((i) => !i.selectable),
@@ -63,7 +60,6 @@ export function initialState(items: PickerItem[], disabled: Set<string> = new Se
 
   return {
     items: ordered,
-    // Index 0 is a usable row whenever there is one, given the sort above.
     cursor: 0,
     chosen: new Set(
       ordered.filter((i) => i.selectable && !disabled.has(i.id)).map((i) => i.id),
@@ -71,19 +67,13 @@ export function initialState(items: PickerItem[], disabled: Set<string> = new Se
   };
 }
 
-/** Move the cursor, skipping rows that cannot be chosen. */
+/** Move across every visible row; unavailable rows remain impossible to toggle. */
 function step(state: PickerState, delta: number): PickerState {
-  const { items } = state;
-  if (items.length === 0) return state;
-
-  // Wraps, and gives up after a full loop so a list with nothing selectable
-  // cannot spin forever.
-  let next = state.cursor;
-  for (let i = 0; i < items.length; i++) {
-    next = (next + delta + items.length) % items.length;
-    if (items[next]!.selectable) return { ...state, cursor: next };
-  }
-  return state;
+  if (state.items.length === 0) return state;
+  return {
+    ...state,
+    cursor: (state.cursor + delta + state.items.length) % state.items.length,
+  };
 }
 
 function toggle(state: PickerState): PickerState {

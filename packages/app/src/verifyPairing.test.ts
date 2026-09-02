@@ -9,8 +9,9 @@
  */
 import { test, expect } from "bun:test";
 import { SecureChannel, e2e } from "@pew2/protocol";
-import { verifyPairing, UNREACHABLE_MESSAGE } from "./verifyPairing";
+import { verifyPairing } from "./verifyPairing";
 import type { Pairing } from "./pairingLink";
+import { pairingFailure } from "./pairingFailure";
 
 const KEY = "a".repeat(64);
 
@@ -31,11 +32,13 @@ class FakeSocket {
   onclose: (() => void) | null = null;
   sent: string[] = [];
   closed = false;
+  throwOnSend = false;
 
   constructor(readonly url: string) {
     FakeSocket.last = this;
   }
   send(raw: string) {
+    if (this.throwOnSend) throw new Error("native detail with a secret URL");
     this.sent.push(raw);
   }
   close() {
@@ -59,6 +62,19 @@ function attempt(overrides: { timeoutMs?: number } = {}) {
 function machine() {
   return new SecureChannel(e2e.fromHex(KEY), "daemon");
 }
+
+test("a socket constructor throw maps without retaining native detail", async () => {
+  const result = verifyPairing(pairing, {
+    createSocket: () => {
+      throw new Error("wss://secret.example/connect?token=secret");
+    },
+  });
+
+  expect(await result).toEqual({
+    ok: false,
+    failure: pairingFailure.socket("create-failed"),
+  });
+});
 
 test("a sealed answer is what counts as proof", async () => {
   // Not the socket opening, and not the relay's greeting: only a frame this
@@ -87,6 +103,17 @@ test("the handshake carries a proof for this device", async () => {
   await result;
 });
 
+test("a hello send throw is a handshake failure", async () => {
+  const { result, socket } = attempt({ timeoutMs: 5000 });
+  socket().throwOnSend = true;
+  socket().onopen!();
+
+  expect(await result).toEqual({
+    ok: false,
+    failure: pairingFailure.handshake("send-failed"),
+  });
+});
+
 test("the relay's greeting alone is not an answer", async () => {
   // The exact shape of the old bug: the relay lets anyone into a room and says
   // `ready`, which used to look enough like success to move on. An empty room
@@ -95,7 +122,10 @@ test("the relay's greeting alone is not an answer", async () => {
   socket().onopen!();
   socket().reply({ t: "ready", wire: 1, now: Date.now() });
 
-  expect(await result).toEqual({ ok: false, message: UNREACHABLE_MESSAGE });
+  expect(await result).toEqual({
+    ok: false,
+    failure: pairingFailure.socket("timed-out"),
+  });
 });
 
 test("a socket refused before it opens fails rather than hanging", async () => {
@@ -104,50 +134,70 @@ test("a socket refused before it opens fails rather than hanging", async () => {
   const { result, socket } = attempt({ timeoutMs: 5000 });
   socket().onerror!();
 
-  expect(await result).toEqual({ ok: false, message: UNREACHABLE_MESSAGE });
+  expect(await result).toEqual({
+    ok: false,
+    failure: pairingFailure.socket("transport-error"),
+  });
+});
+
+test("a close before proof has its own transport verdict", async () => {
+  const { result, socket } = attempt({ timeoutMs: 5000 });
+  socket().onclose!();
+
+  expect(await result).toEqual({
+    ok: false,
+    failure: pairingFailure.socket("closed-before-proof"),
+  });
 });
 
 test("silence fails on a timer instead of waiting forever", async () => {
   const { result, socket } = attempt({ timeoutMs: 30 });
   socket().onopen!();
 
-  expect(await result).toEqual({ ok: false, message: UNREACHABLE_MESSAGE });
-});
-
-test("a refusal the daemon explained is shown in its own words", async () => {
-  // The single-device gate names the fix — `pew2 pair --rotate` — and only the
-  // user can tell a stolen link from their own reinstalled phone. Replacing
-  // that with a generic failure would throw away the one useful sentence.
-  const { result, socket } = attempt({ timeoutMs: 5000 });
-  socket().onopen!();
-  socket().reply({
-    t: "error",
-    code: "device-refused",
-    deviceId: "phone-aaaa",
-    message: "This pairing is already in use by another device.",
-  });
-
   expect(await result).toEqual({
     ok: false,
-    message: "This pairing is already in use by another device.",
+    failure: pairingFailure.socket("timed-out"),
   });
 });
 
-test("a refusal aimed at another device is ignored", async () => {
-  // The relay forwards cleartext to every app in the room, so an attacker
-  // probing with a leaked link produces a refusal that lands here too. Acting
-  // on it would report a perfectly good code as broken at the exact moment
-  // someone else is attacking the pairing.
+test("known refusals map to fixed local failures", async () => {
+  const cases = [
+    { code: "device-refused", reason: "device-refused", deviceId: pairing.deviceId },
+    { code: "unpaired", reason: "unpaired", deviceId: undefined },
+    { code: "wire-version", reason: "wire-version", deviceId: pairing.deviceId },
+  ] as const;
+
+  for (const { code, reason, deviceId } of cases) {
+    const { result, socket } = attempt({ timeoutMs: 5000 });
+    socket().onopen!();
+    socket().reply({
+      t: "error",
+      code,
+      ...(deviceId ? { deviceId } : {}),
+      message: "remote free text with wss://secret.example/token",
+    });
+    expect(await result).toEqual({
+      ok: false,
+      failure: pairingFailure.handshake(reason),
+    });
+  }
+});
+
+test("foreign and unaddressed broadcast refusals are ignored", async () => {
   const { result, socket } = attempt({ timeoutMs: 5000 });
   socket().onopen!();
-  socket().reply({
-    t: "error",
-    code: "device-refused",
-    deviceId: "phone-someone-else",
-    message: "This pairing is already in use by another device.",
-  });
-  socket().reply(machine().seal({ t: "device.joined" }));
 
+  for (const code of ["device-refused", "wire-version"]) {
+    socket().reply({ t: "error", code, message: "not addressed" });
+    socket().reply({
+      t: "error",
+      code,
+      deviceId: "phone-someone-else",
+      message: "addressed elsewhere",
+    });
+  }
+
+  socket().reply(machine().seal({ t: "device.joined" }));
   expect(await result).toEqual({ ok: true });
 });
 
@@ -159,9 +209,10 @@ test("an answer this device cannot decrypt is a failure, not something to wait p
   socket().onopen!();
   socket().reply(other.seal({ t: "device.joined" }));
 
-  const outcome = await result;
-  expect(outcome.ok).toBe(false);
-  expect(outcome.ok === false && outcome.message).toContain("cannot read");
+  expect(await result).toEqual({
+    ok: false,
+    failure: pairingFailure.handshake("key-mismatch"),
+  });
 });
 
 test("the probe never leaves its socket open", async () => {

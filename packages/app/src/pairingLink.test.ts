@@ -88,38 +88,27 @@ test("corrects a relay link pasted with the daemon role", () => {
   expect(new URL(result.pairing.url).searchParams.get("role")).toBe("app");
 });
 
-test("rejects a link with no token", () => {
-  const result = parsePairing("ws://192.168.0.102:8787/");
+test("maps every link validation branch to an exact allowlisted failure", () => {
+  const cases = [
+    ["", "empty"],
+    ["   ", "empty"],
+    ["hello", "invalid-url"],
+    ["ws://", "invalid-url"],
+    [`http://192.168.0.102:8787/?token=${TOKEN}${FRAGMENT}`, "unsupported-protocol"],
+    [`ws://192.168.0.102:8787/${FRAGMENT}`, "missing-token"],
+    [`ws://192.168.0.102:8787/?token=short${FRAGMENT}`, "short-token"],
+    [`wss://relay.example.com/connect?pairing=${TOKEN}&role=app`, "missing-key"],
+    [`wss://relay.example.com/connect?pairing=${TOKEN}&role=app#nothing=here`, "missing-key"],
+    [`wss://relay.example.com/connect?pairing=${TOKEN}&role=app#k=!!!!`, "invalid-key"],
+    [`wss://relay.example.com/connect?pairing=${TOKEN}&role=app#k=AAAA`, "invalid-key"],
+  ] as const;
 
-  expect(result.ok).toBe(false);
-  if (result.ok) return;
-  // Names the command that produces a correct link.
-  expect(result.error).toContain("pew2 pair");
-});
-
-test("rejects a truncated token rather than failing later at the socket", () => {
-  const result = parsePairing("ws://192.168.0.102:8787/?token=abc123");
-
-  expect(result.ok).toBe(false);
-  if (result.ok) return;
-  expect(result.error).toContain("cut off");
-});
-
-test("rejects the wrong scheme, and says which one it got", () => {
-  const result = parsePairing(`http://192.168.0.102:8787/?token=${TOKEN}${FRAGMENT}`);
-
-  expect(result.ok).toBe(false);
-  if (result.ok) return;
-  expect(result.error).toContain("ws://");
-  expect(result.error).toContain("http://");
-});
-
-test("rejects empty and non-URL input", () => {
-  for (const input of ["", "   ", "hello", "192.168.0.102:8787"]) {
+  for (const [input, reason] of cases) {
     const result = parsePairing(input);
     expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.length).toBeGreaterThan(0);
+    if (result.ok) continue;
+    expect(result.failure.stage).toBe("link");
+    expect(result.failure.reason).toBe(reason);
   }
 });
 
@@ -148,27 +137,4 @@ test("the key is taken from the fragment and kept off the wire", () => {
   expect(result.pairing.url).not.toContain("#");
   expect(result.pairing.url).not.toContain(KEY);
   expect(result.pairing.label).not.toContain(KEY);
-});
-
-test("a link with no key is refused with something to do about it", () => {
-  // A link from a build before encryption existed, or one truncated at the `#`
-  // by a scanner treating it as a comment. Connecting would produce a socket
-  // that opens and then silently decrypts nothing.
-  const result = parsePairing(`wss://relay.example.com/connect?pairing=${TOKEN}&role=app`);
-
-  expect(result.ok).toBe(false);
-  if (result.ok) return;
-  expect(result.error).toContain("pew2 pair");
-});
-
-test("a damaged or wrong-length key is refused rather than used", () => {
-  // Checked here rather than at first use: a truncated key produces a connection
-  // that opens and then decrypts nothing, which is the least diagnosable failure
-  // this app has.
-  for (const fragment of ["#k=", "#k=!!!!", "#k=AAAA", "#nothing=here"]) {
-    const result = parsePairing(
-      `wss://relay.example.com/connect?pairing=${TOKEN}&role=app${fragment}`,
-    );
-    expect(result.ok).toBe(false);
-  }
 });

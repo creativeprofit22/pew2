@@ -74,6 +74,12 @@ import {
   type ReplayEvent,
 } from "./replayFold";
 import { readPermissionRequest } from "./permissions";
+import {
+  pairingFailure,
+  pairingRefusalForDevice,
+  recordPairingFailure,
+  type PairingFailure,
+} from "./pairingFailure";
 
 export type Status = "connecting" | "online" | "offline";
 
@@ -306,7 +312,7 @@ interface State {
    * thing it shows when the desktop is simply asleep, and tells the one user who
    * needs to act nothing at all.
    */
-  fatal?: string;
+  fatal?: PairingFailure;
   /**
    * Set once reconnecting has failed enough times to stop being a blip.
    *
@@ -321,7 +327,7 @@ interface State {
    * "Connecting to your machine..." held forever is the state that sent someone
    * to a stuck screen with nothing to act on.
    */
-  unreachable?: boolean;
+  unreachable?: PairingFailure;
   providers: Provider[];
   /**
    * A newer pew2 the paired computer has not got, when there is one.
@@ -624,6 +630,7 @@ export function useDaemon(
   const fatal = useRef(false);
   const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attempts = useRef(0);
+  const stalledVisible = useRef(false);
   const alive = useRef(true);
   const resume = useRef<(() => void) | undefined>(undefined);
   // Mirrors state.sessionId so actions can read it without doing work inside a
@@ -872,7 +879,10 @@ export function useDaemon(
     // your machine" sitting over a connection that is only just starting — and
     // one already past the threshold would show it before the first try.
     attempts.current = 0;
-    setState((s) => (s.unreachable ? { ...s, unreachable: false } : s));
+    stalledVisible.current = false;
+    setState((s) =>
+      s.unreachable || s.fatal ? { ...s, unreachable: undefined, fatal: undefined } : s,
+    );
 
     const connect = () => {
       if (!alive.current) return;
@@ -1005,6 +1015,7 @@ export function useDaemon(
       ws.onopen = () => {
         clearTimeout(deadline);
         attempts.current = 0;
+        stalledVisible.current = false;
         // A request written to the socket that died is never answered, and its
         // entry would hold the drawer in a skeleton forever. Dropping them here
         // also lets the open project be asked for again.
@@ -1019,7 +1030,7 @@ export function useDaemon(
           ...s,
           status: "online",
           // Whatever it was, it is reachable now.
-          unreachable: false,
+          unreachable: undefined,
           // Turns end while the phone is asleep and the socket is dead, and
           // `session.idle` is not replayed — only `session.event` is persisted.
           // So anything believed to be working across a drop is a guess, and
@@ -1064,35 +1075,20 @@ export function useDaemon(
         // are the ones left in the open.
         const kind = (frame as { t?: unknown } | null)?.t;
         if (kind === "error") {
-          const code = (frame as { code?: unknown }).code;
-          // `device-refused` joins these: the pairing is already claimed by
-          // another device, which is fatal in exactly the same way — retrying
-          // cannot fix it, and the message names the rotation that can.
-          //
-          // But only when it is addressed to this device. The relay forwards
-          // cleartext to every app in the room, so a refusal aimed at someone
-          // else — an attacker probing with a leaked link — arrives here too.
-          // Acting on it would let one frame from that attacker put the phone
-          // that actually owns the pairing into a permanent, un-retried failure.
-          const refusedDevice = (frame as { deviceId?: unknown }).deviceId;
-          if (
-            code === "device-refused" &&
-            typeof refusedDevice === "string" &&
-            refusedDevice !== deviceId
-          ) {
-            return;
-          }
-          if (code === "wire-version" || code === "unpaired" || code === "device-refused") {
-            const detail = (frame as { message?: unknown }).message;
+          // Relay cleartext is broadcast room-wide. Device and version refusals
+          // are fatal only when explicitly addressed to this phone; legacy
+          // `unpaired` remains valid because LAN delivers it on one socket.
+          const failure = pairingRefusalForDevice(
+            frame as { code?: unknown; deviceId?: unknown },
+            deviceId,
+          );
+          if (failure && !fatal.current) {
             fatal.current = true;
+            recordPairingFailure(failure);
             // Nothing will ever be fetched from that machine again, and these
             // are pictures of its filesystem. Forget them with the pairing.
             clearImages();
-            setState((s) => ({
-              ...s,
-              status: "offline",
-              fatal: typeof detail === "string" ? detail : "This device is no longer paired.",
-            }));
+            setState((s) => ({ ...s, status: "offline", fatal: failure }));
           }
           return;
         }
@@ -1975,10 +1971,15 @@ export function useDaemon(
         // of backoff: long enough to ride out a network switch or a daemon
         // restart, short enough that nobody is left reading a spinner.
         const stalled = attempts.current + 1 >= STALLED_ATTEMPTS;
+        const failure = stalled ? pairingFailure.socket("reconnect-stalled") : undefined;
+        if (failure && !stalledVisible.current) {
+          stalledVisible.current = true;
+          recordPairingFailure(failure);
+        }
         setState((s) =>
           s.status === "offline" && Boolean(s.unreachable) === stalled
             ? s
-            : { ...s, status: "offline", unreachable: stalled },
+            : { ...s, status: "offline", unreachable: failure },
         );
         // Exponential backoff, capped, so a sleeping laptop does not get hammered.
         const delay = Math.min(1000 * 2 ** attempts.current, 10_000);
@@ -2037,12 +2038,13 @@ export function useDaemon(
       // the next delay and let one more failure trip the "can't reach your
       // machine" threshold on what is, for the user, the first try.
       attempts.current = 0;
+      stalledVisible.current = false;
       // And the verdict those attempts produced goes with them. The UI checks
       // `unreachable` before `status`, so leaving it set would keep "Can't reach
       // your machine" on screen over a connection that is only just starting —
       // the pessimistic message this whole path exists to get rid of. Guarded so
       // a resume with nothing to correct does not re-render the tree.
-      setState((s) => (s.unreachable ? { ...s, unreachable: false } : s));
+      setState((s) => (s.unreachable ? { ...s, unreachable: undefined } : s));
       connect();
     };
 

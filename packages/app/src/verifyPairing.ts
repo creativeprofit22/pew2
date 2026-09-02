@@ -21,6 +21,7 @@
  */
 import { SecureChannel, e2e, wire } from "@pew2/protocol";
 import type { Pairing } from "./pairingLink";
+import { pairingFailure, pairingRefusalForDevice, type PairingFailure } from "./pairingFailure";
 
 /**
  * How long to wait for a sealed reply.
@@ -31,23 +32,8 @@ import type { Pairing } from "./pairingLink";
  */
 export const VERIFY_TIMEOUT_MS = 8000;
 
-/**
- * What the user sees when the handshake never happens.
- *
- * Deliberately covers both causes, because from here they are genuinely
- * indistinguishable: the relay returns the same 409 for a machine that is
- * asleep and for a token that was rotated out from under this code. Naming only
- * one would be a guess presented as a fact, and would send half the users who
- * read it looking in the wrong place.
- */
-export const UNREACHABLE_MESSAGE =
-  "That code did not connect. Check the machine is awake and running pew2 — " +
-  "and if the code is old, run `pew2 pair` there to get the current one.";
+export type VerifyResult = { ok: true } | { ok: false; failure: PairingFailure };
 
-export type VerifyResult = { ok: true } | { ok: false; message: string };
-
-/** Codes the daemon sends in the clear when it refuses a device outright. */
-const REFUSAL_CODES = new Set(["device-refused", "unpaired", "wire-version"]);
 
 /**
  * Try one full handshake against a pairing.
@@ -72,7 +58,7 @@ export function verifyPairing(
     } catch {
       // A URL the platform will not even open. Already validated by
       // `parsePairing`, so this is a runtime refusal rather than a typo.
-      resolve({ ok: false, message: UNREACHABLE_MESSAGE });
+      resolve({ ok: false, failure: pairingFailure.socket("create-failed") });
       return;
     }
 
@@ -97,18 +83,25 @@ export function verifyPairing(
       resolve(result);
     };
 
-    const timer = setTimeout(() => finish({ ok: false, message: UNREACHABLE_MESSAGE }), timeoutMs);
+    const timer = setTimeout(
+      () => finish({ ok: false, failure: pairingFailure.socket("timed-out") }),
+      timeoutMs,
+    );
 
     socket.onopen = () => {
-      socket.send(
-        JSON.stringify({
-          t: "hello",
-          wire: wire.WIRE_VERSION,
-          role: "app",
-          deviceId: pairing.deviceId,
-          proof: channel.proof(pairing.deviceId),
-        }),
-      );
+      try {
+        socket.send(
+          JSON.stringify({
+            t: "hello",
+            wire: wire.WIRE_VERSION,
+            role: "app",
+            deviceId: pairing.deviceId,
+            proof: channel.proof(pairing.deviceId),
+          }),
+        );
+      } catch {
+        finish({ ok: false, failure: pairingFailure.handshake("send-failed") });
+      }
     };
 
     socket.onmessage = (event: { data: unknown }) => {
@@ -124,25 +117,14 @@ export function verifyPairing(
       // nothing about the machine, so it is not an answer.
       if (kind === "ready") return;
 
-      // A refusal the daemon took the trouble to explain. Its wording names the
-      // fix — rotation, or an app too old — so it is shown as-is rather than
-      // replaced with a generic failure.
+      // Only allowlisted codes are trusted. Relay-broadcastable refusals must
+      // name this device; legacy `unpaired` remains valid for the LAN socket.
       if (kind === "error") {
-        const code = (frame as { code?: unknown }).code;
-        const message = (frame as { message?: unknown }).message;
-        // A refusal aimed at another device is not ours to act on. The relay
-        // forwards cleartext to every app in the room, so a probe from someone
-        // holding a leaked link produces a refusal that lands here too — and
-        // failing this pairing because of it would report a working code as
-        // broken at the exact moment someone else is attacking it.
-        const refusedDevice = (frame as { deviceId?: unknown }).deviceId;
-        if (typeof refusedDevice === "string" && refusedDevice !== pairing.deviceId) return;
-        if (typeof code === "string" && REFUSAL_CODES.has(code)) {
-          finish({
-            ok: false,
-            message: typeof message === "string" && message ? message : UNREACHABLE_MESSAGE,
-          });
-        }
+        const failure = pairingRefusalForDevice(
+          frame as { code?: unknown; deviceId?: unknown },
+          pairing.deviceId,
+        );
+        if (failure) finish({ ok: false, failure });
         return;
       }
 
@@ -152,12 +134,7 @@ export function verifyPairing(
       // different key — a token and key from different pairings, or a link
       // assembled by hand — so it is a failure, not something to wait past.
       if (channel.open(frame) === undefined) {
-        finish({
-          ok: false,
-          message:
-            "That code did not work: the machine answered with a key this device cannot read. " +
-            "Run `pew2 pair` on the machine and scan the new code.",
-        });
+        finish({ ok: false, failure: pairingFailure.handshake("key-mismatch") });
         return;
       }
       finish({ ok: true });
@@ -167,7 +144,9 @@ export function verifyPairing(
     // every wrong-credential case. There is nothing to read from them: the
     // close code is 1006 with no reason on most platforms, so the honest
     // message is the one that does not pretend to know which cause it was.
-    socket.onerror = () => finish({ ok: false, message: UNREACHABLE_MESSAGE });
-    socket.onclose = () => finish({ ok: false, message: UNREACHABLE_MESSAGE });
+    socket.onerror = () =>
+      finish({ ok: false, failure: pairingFailure.socket("transport-error") });
+    socket.onclose = () =>
+      finish({ ok: false, failure: pairingFailure.socket("closed-before-proof") });
   });
 }

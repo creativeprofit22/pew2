@@ -98,8 +98,8 @@ export function buildTaskXml(options: InstallOptions = {}): string {
     `>> ${quoteArgument(join(logs, "daemon.log"))} ` +
     `2>> ${quoteArgument(join(logs, "daemon.error.log"))}`;
 
-  // UTF-16 is what `schtasks /create /xml` expects, and the declaration has to
-  // say so even though the file is written as UTF-8 with a BOM below.
+  // UTF-16 is what `schtasks /create /xml` expects, so the declaration and
+  // encoding used when the task is installed must agree.
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -178,9 +178,9 @@ export async function installScheduledTask(
   const path = taskXmlPath(home);
   await mkdir(dirname(path), { recursive: true });
   await mkdir(logDir(options.env), { recursive: true });
-  // A BOM, because schtasks reads the file as UTF-16/Unicode and rejects a
-  // plain UTF-8 one with a bare "The task XML is malformed".
-  await writeFile(path, `\ufeff${buildTaskXml(options)}`, "utf8");
+  // A UTF-16LE BOM and matching encoding, because schtasks rejects UTF-8 XML
+  // with a bare "The task XML is malformed".
+  await writeFile(path, `\ufeff${buildTaskXml(options)}`, "utf16le");
 
   // `/f` overwrites an existing registration, so re-running install picks up a
   // changed definition instead of failing on a name clash.
