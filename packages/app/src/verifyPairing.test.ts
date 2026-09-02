@@ -160,20 +160,43 @@ test("silence fails on a timer instead of waiting forever", async () => {
   });
 });
 
-test("known refusals map to fixed local failures", async () => {
+test("known refusals map structured update targets to fixed local failures", async () => {
   const cases = [
-    { code: "device-refused", reason: "device-refused", deviceId: pairing.deviceId },
-    { code: "unpaired", reason: "unpaired", deviceId: undefined },
-    { code: "wire-version", reason: "wire-version", deviceId: pairing.deviceId },
+    {
+      code: "device-refused",
+      reason: "device-refused",
+      deviceId: pairing.deviceId,
+      update: undefined,
+    },
+    { code: "unpaired", reason: "unpaired", deviceId: undefined, update: undefined },
+    {
+      code: "wire-version",
+      reason: "wire-version-app-old",
+      deviceId: pairing.deviceId,
+      update: "app",
+    },
+    {
+      code: "wire-version",
+      reason: "wire-version-daemon-old",
+      deviceId: pairing.deviceId,
+      update: "daemon",
+    },
+    {
+      code: "wire-version",
+      reason: "wire-version",
+      deviceId: pairing.deviceId,
+      update: undefined,
+    },
   ] as const;
 
-  for (const { code, reason, deviceId } of cases) {
+  for (const { code, reason, deviceId, update } of cases) {
     const { result, socket } = attempt({ timeoutMs: 5000 });
     socket().onopen!();
     socket().reply({
       t: "error",
       code,
       ...(deviceId ? { deviceId } : {}),
+      ...(update ? { update } : {}),
       message: "remote free text with wss://secret.example/token",
     });
     expect(await result).toEqual({

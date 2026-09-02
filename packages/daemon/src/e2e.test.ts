@@ -22,6 +22,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { AppClient } from "./testing/app-client.js";
 import { startDaemon, type RunningDaemon } from "./testing/daemon-process.js";
+import { wire } from "@pew2/protocol";
 
 /**
  * Per-test budget, comfortably above the client's own eight-second wait.
@@ -98,21 +99,30 @@ test("a device the pairing does not belong to is refused, in the clear", async (
   stranger.close();
 }, TEST_TIMEOUT);
 
-test("a wire-version refusal targets the device whose hello mismatched", async () => {
-  const outdated = new WebSocket(`ws://127.0.0.1:${daemon.port}/?token=${daemon.token}`);
-  const frames: any[] = [];
-  outdated.onmessage = (event) => frames.push(JSON.parse(String(event.data)));
+test("LAN wire-version refusals name the outdated side and target the app", async () => {
+  for (const { peerWire, update } of [
+    { peerWire: wire.WIRE_VERSION - 1, update: "app" },
+    { peerWire: wire.WIRE_VERSION + 1, update: "daemon" },
+  ] as const) {
+    const mismatched = new WebSocket(`ws://127.0.0.1:${daemon.port}/?token=${daemon.token}`);
+    const frames: any[] = [];
+    mismatched.onmessage = (event) => frames.push(JSON.parse(String(event.data)));
 
-  await new Promise<void>((resolve) => {
-    outdated.onopen = () => resolve();
-  });
-  outdated.send(
-    JSON.stringify({ t: "hello", wire: 0, role: "app", deviceId: "outdated-phone" }),
-  );
-  await Bun.sleep(100);
+    await new Promise<void>((resolve) => {
+      mismatched.onopen = () => resolve();
+    });
+    mismatched.send(
+      JSON.stringify({ t: "hello", wire: peerWire, role: "app", deviceId: "mismatched-phone" }),
+    );
+    await new Promise<void>((resolve) => {
+      mismatched.onclose = () => resolve();
+    });
 
-  outdated.close();
-  expect(frames.find((frame) => frame.code === "wire-version")?.deviceId).toBe("outdated-phone");
+    expect(frames.find((frame) => frame.code === "wire-version")).toMatchObject({
+      deviceId: "mismatched-phone",
+      update,
+    });
+  }
 }, TEST_TIMEOUT);
 
 test("a sealed message from a socket that never said hello is ignored entirely", async () => {

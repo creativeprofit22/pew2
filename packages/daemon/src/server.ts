@@ -262,7 +262,13 @@ const server = Bun.serve({
         // told to update rather than silently refused as unauthenticated.
         const mismatch = wire.wireMismatch(hello.wire);
         if (mismatch) {
-          sendPlain(ws, { t: "error", code: "wire-version", deviceId, message: mismatch });
+          sendPlain(ws, {
+            t: "error",
+            code: "wire-version",
+            deviceId,
+            message: mismatch,
+            update: wire.wireUpdateTarget(hello.wire),
+          });
           ws.close(1002, "protocol version");
           return;
         }

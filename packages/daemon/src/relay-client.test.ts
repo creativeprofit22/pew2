@@ -327,24 +327,31 @@ test("a relay client with no local listener is still handled", async () => {
   relay.stop();
 });
 
-test("a wire-version refusal targets the app whose hello mismatched", async () => {
-  const { relay } = client();
-  relay.start();
-  const socket = FakeSocket.instances[0]!;
-  socket.open();
+test("wire-version refusals name the outdated side and target the app", () => {
+  for (const { peerWire, update } of [
+    { peerWire: WIRE_VERSION - 1, update: "app" },
+    { peerWire: WIRE_VERSION + 1, update: "daemon" },
+  ] as const) {
+    const { relay } = client();
+    relay.start();
+    const socket = FakeSocket.instances[0]!;
+    socket.open();
 
-  socket.receive({
-    t: "hello",
-    wire: WIRE_VERSION - 1,
-    role: "app",
-    deviceId: "outdated-phone",
-  });
+    socket.receive({
+      t: "hello",
+      wire: peerWire,
+      role: "app",
+      deviceId: "mismatched-phone",
+    });
 
-  const refusal = socket.sent
-    .map((raw) => JSON.parse(raw) as { t?: string; code?: string; deviceId?: string })
-    .find((frame) => frame.t === "error" && frame.code === "wire-version");
-  expect(refusal?.deviceId).toBe("outdated-phone");
-  relay.stop();
+    const refusal = socket.sent
+      .map((raw) =>
+        JSON.parse(raw) as { t?: string; code?: string; deviceId?: string; update?: string },
+      )
+      .find((frame) => frame.t === "error" && frame.code === "wire-version");
+    expect(refusal).toMatchObject({ deviceId: "mismatched-phone", update });
+    relay.stop();
+  }
 });
 
 test("a malformed or unsealed frame is dropped, not answered", async () => {

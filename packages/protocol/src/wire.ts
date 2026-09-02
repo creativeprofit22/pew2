@@ -51,12 +51,23 @@ export function readCursors(value: unknown): Record<string, number> {
  * so the side that is *behind* is named: "update the app" and "update pew2 on
  * your computer" are different actions, and guessing wrong wastes an evening.
  */
+export const WireUpdateTarget = z.enum(["app", "daemon"]);
+export type WireUpdateTarget = z.output<typeof WireUpdateTarget>;
+
+/** The allowlisted upgrade action for a valid mismatched peer version. */
+export function wireUpdateTarget(peer: unknown): WireUpdateTarget | undefined {
+  if (typeof peer !== "number" || !Number.isInteger(peer) || peer === WIRE_VERSION) {
+    return undefined;
+  }
+  return peer < WIRE_VERSION ? "app" : "daemon";
+}
+
 export function wireMismatch(peer: unknown): string | undefined {
   if (peer === WIRE_VERSION) return undefined;
   if (typeof peer !== "number" || !Number.isInteger(peer)) {
     return "This client did not say which protocol version it speaks. Update it and pair again.";
   }
-  return peer < WIRE_VERSION
+  return wireUpdateTarget(peer) === "app"
     ? `This app speaks protocol v${peer}, but this machine needs v${WIRE_VERSION}. Update the app and pair again.`
     : `This app speaks protocol v${peer}, but this machine only has v${WIRE_VERSION}. Update pew2 on your computer.`;
 }
@@ -686,6 +697,7 @@ export const ErrorMessage = z.object({
   message: z.string(),
   sessionId: z.string().optional(),
   deviceId: z.string().optional(),
+  update: WireUpdateTarget.optional(),
 });
 
 /**

@@ -37,7 +37,7 @@ test("every row in the shared slot takes its height from here", () => {
   // that one number reaches all four rows, not anything computed. A fifth row
   // added to the transcript's footer belongs in this list too.
   for (const file of ["ChatThread.tsx", "ActivityLine.tsx", "TurnReceipt.tsx"]) {
-    const source = Bun.file(new URL(file, import.meta.url).pathname).text();
+    const source = Bun.file(new URL(file, import.meta.url)).text();
     expect(source).resolves.toContain("useStatusRowHeight");
   }
 });

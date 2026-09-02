@@ -1079,7 +1079,7 @@ export function useDaemon(
           // are fatal only when explicitly addressed to this phone; legacy
           // `unpaired` remains valid because LAN delivers it on one socket.
           const failure = pairingRefusalForDevice(
-            frame as { code?: unknown; deviceId?: unknown },
+            frame as { code?: unknown; deviceId?: unknown; update?: unknown },
             deviceId,
           );
           if (failure && !fatal.current) {

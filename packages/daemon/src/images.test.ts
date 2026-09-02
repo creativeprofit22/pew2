@@ -82,7 +82,6 @@ test("a path outside the project is refused", async () => {
 
 test("a symlink is judged by where it points, not how it is spelled", async () => {
   const root = await project();
-  await symlink("/Users/someone-else/private/photo.png", join(root, "link.png"));
 
   // Spelled inside the project, so only resolving first catches it. The stub
   // stands in for a target that need not exist on the machine running this.
@@ -155,18 +154,25 @@ test("a file swapped for a symlink after the check is not followed", async () =>
 
   // Exactly what an attacker with write access to that directory does.
   await rm(target);
-  await symlink("/etc/passwd", target);
+  if (process.platform === "win32") {
+    const outside = await mkdtemp(join(tmpdir(), "pew2-image-target-"));
+    await symlink(outside, target, "junction");
+  } else {
+    await symlink("/etc/passwd", target);
+  }
 
   // The check is stubbed to answer as it did a moment earlier: a plain file,
   // inside the project. Everything after it is the real filesystem.
   const fs = { realpath: async (path: string) => path, open: nodeImageFs.open };
-  await expect(loadImage("out/plot.png", { cwd: root, env: {}, fs })).rejects.toThrow(
-    /was not found/,
-  );
+  const refusal =
+    process.platform === "win32"
+      ? "'out/plot.png' is not a file"
+      : "'out/plot.png' was not found";
+  await expect(loadImage("out/plot.png", { cwd: root, env: {}, fs })).rejects.toThrow(refusal);
 
   // And a genuine file at that path still reads, so this refuses the swap rather
   // than refusing everything.
-  await rm(target);
+  await rm(target, { recursive: process.platform === "win32" });
   await writeFile(target, PNG);
   expect((await loadImage("out/plot.png", { cwd: root, env: {}, fs })).mimeType).toBe(
     "image/png",

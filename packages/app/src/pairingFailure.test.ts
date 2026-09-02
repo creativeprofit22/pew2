@@ -40,7 +40,15 @@ const cases: Array<[PairingFailure, string]> = [
   ],
   [
     pairingFailure.handshake("wire-version"),
-    "This app and the machine use different protocol versions. Update pew2 on the machine.",
+    "This app and the machine use different protocol versions. Update the app and pew2 on the machine.",
+  ],
+  [
+    pairingFailure.handshake("wire-version-app-old"),
+    "This app uses an older protocol version. Update the app.",
+  ],
+  [
+    pairingFailure.handshake("wire-version-daemon-old"),
+    "pew2 on the machine uses an older protocol version. Update pew2 on the machine.",
   ],
   [
     pairingFailure.handshake("key-mismatch"),
@@ -66,6 +74,19 @@ test("durable connections act only on refusals targeting this device", () => {
     );
     expect(pairingRefusalForDevice({ code, deviceId: "phone-other" }, current)).toBeUndefined();
     expect(pairingRefusalForDevice({ code }, current)).toBeUndefined();
+  }
+
+  expect(
+    pairingRefusalForDevice({ code: "wire-version", deviceId: current, update: "app" }, current),
+  ).toEqual(pairingFailure.handshake("wire-version-app-old"));
+  expect(
+    pairingRefusalForDevice({ code: "wire-version", deviceId: current, update: "daemon" }, current),
+  ).toEqual(pairingFailure.handshake("wire-version-daemon-old"));
+  // The target is untrusted network input. Unknown and absent values use static neutral copy.
+  for (const update of [undefined, "desktop", null]) {
+    expect(
+      pairingRefusalForDevice({ code: "wire-version", deviceId: current, update }, current),
+    ).toEqual(pairingFailure.handshake("wire-version"));
   }
 
   // LAN sends this on the same socket, so older daemons need no address.

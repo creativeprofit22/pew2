@@ -24,7 +24,11 @@ const messages = {
       "That code did not connect. Check the machine is awake and running pew2 — and if the code is old, run `pew2 pair` there to get the current one.",
     "device-refused": "This pairing is already in use. Run `pew2 pair --rotate` on the machine.",
     unpaired: "This device is no longer paired. Run `pew2 pair` on the machine.",
-    "wire-version": "This app and the machine use different protocol versions. Update pew2 on the machine.",
+    "wire-version":
+      "This app and the machine use different protocol versions. Update the app and pew2 on the machine.",
+    "wire-version-app-old": "This app uses an older protocol version. Update the app.",
+    "wire-version-daemon-old":
+      "pew2 on the machine uses an older protocol version. Update pew2 on the machine.",
     "key-mismatch":
       "That code did not work: the machine answered with a key this device cannot read. Run `pew2 pair` on the machine and scan the new code.",
   },
@@ -58,21 +62,25 @@ export const pairingFailure = {
     ({ stage: "handshake", reason, message: messages.handshake[reason] }) as PairingFailure,
 };
 
-export function pairingRefusalFailure(code: unknown): PairingFailure | undefined {
+export function pairingRefusalFailure(code: unknown, update?: unknown): PairingFailure | undefined {
   if (code === "device-refused") return pairingFailure.handshake("device-refused");
   if (code === "unpaired") return pairingFailure.handshake("unpaired");
-  if (code === "wire-version") return pairingFailure.handshake("wire-version");
+  if (code === "wire-version") {
+    if (update === "app") return pairingFailure.handshake("wire-version-app-old");
+    if (update === "daemon") return pairingFailure.handshake("wire-version-daemon-old");
+    return pairingFailure.handshake("wire-version");
+  }
   return undefined;
 }
 
 /** Target broadcast refusals; preserve legacy `unpaired` from the one-socket LAN path. */
 export function pairingRefusalForDevice(
-  frame: { code?: unknown; deviceId?: unknown },
+  frame: { code?: unknown; deviceId?: unknown; update?: unknown },
   currentDeviceId: string,
 ): PairingFailure | undefined {
   if (frame.code === "unpaired") return pairingRefusalFailure(frame.code);
   if (frame.deviceId !== currentDeviceId) return undefined;
-  return pairingRefusalFailure(frame.code);
+  return pairingRefusalFailure(frame.code, frame.update);
 }
 
 export function formatPairingFailure(failure: PairingFailure): string {

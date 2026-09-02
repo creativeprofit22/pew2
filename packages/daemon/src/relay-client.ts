@@ -245,7 +245,13 @@ export class RelayClient {
         const mismatch = wire.wireMismatch(hello.wire);
         if (mismatch) {
           socket.send(
-            JSON.stringify({ t: "error", code: "wire-version", deviceId, message: mismatch }),
+            JSON.stringify({
+              t: "error",
+              code: "wire-version",
+              deviceId,
+              message: mismatch,
+              update: wire.wireUpdateTarget(hello.wire),
+            }),
           );
           return;
         }

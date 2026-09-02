@@ -8,7 +8,14 @@
  */
 import { expect, test } from "bun:test";
 import { directionKey, isEnvelope, seal } from "./crypto.js";
-import { ClientMessage, readCursors, ServerMessage, WIRE_VERSION, wireMismatch } from "./wire.js";
+import {
+  ClientMessage,
+  readCursors,
+  ServerMessage,
+  WIRE_VERSION,
+  wireMismatch,
+  wireUpdateTarget,
+} from "./wire.js";
 
 test("an outdated hello still parses, so its sender can be told why", () => {
   // The subtle one. Pinning `wire` to a literal in the schema would make this
@@ -25,29 +32,43 @@ test("an outdated hello still parses, so its sender can be told why", () => {
   expect(parsed.success).toBe(true);
 });
 
-test("a cleartext error can target one device without breaking older frames", () => {
-  const targeted = ServerMessage.parse({
-    t: "error",
-    code: "wire-version",
-    message: "update",
-    deviceId: "phone-aaaa",
-  });
-  expect(targeted).toMatchObject({ deviceId: "phone-aaaa" });
+test("a cleartext error allowlists an optional update target", () => {
+  for (const update of ["app", "daemon"] as const) {
+    const targeted = ServerMessage.parse({
+      t: "error",
+      code: "wire-version",
+      message: "update",
+      deviceId: "phone-aaaa",
+      update,
+    });
+    expect(targeted).toMatchObject({ deviceId: "phone-aaaa", update });
+  }
 
   const legacy = ServerMessage.parse({ t: "error", code: "unpaired", message: "pair again" });
-  expect((legacy as { deviceId?: string }).deviceId).toBeUndefined();
+  expect((legacy as { update?: string }).update).toBeUndefined();
+  expect(
+    ServerMessage.safeParse({
+      t: "error",
+      code: "wire-version",
+      message: "update",
+      update: "desktop",
+    }).success,
+  ).toBe(false);
 });
 
 test("a version mismatch names which side is behind", () => {
   // "Update the app" and "update pew2 on your computer" are different actions,
   // and sending someone after the wrong one wastes their evening.
   expect(wireMismatch(WIRE_VERSION)).toBeUndefined();
+  expect(wireUpdateTarget(WIRE_VERSION)).toBeUndefined();
 
   const older = wireMismatch(WIRE_VERSION - 1);
   expect(older).toContain("Update the app");
+  expect(wireUpdateTarget(WIRE_VERSION - 1)).toBe("app");
 
   const newer = wireMismatch(WIRE_VERSION + 1);
   expect(newer).toContain("Update pew2 on your computer");
+  expect(wireUpdateTarget(WIRE_VERSION + 1)).toBe("daemon");
 
   // Both quote the versions, so a bug report carries the numbers.
   expect(older).toContain(`v${WIRE_VERSION}`);

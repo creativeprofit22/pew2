@@ -121,7 +121,7 @@ export function verifyPairing(
       // name this device; legacy `unpaired` remains valid for the LAN socket.
       if (kind === "error") {
         const failure = pairingRefusalForDevice(
-          frame as { code?: unknown; deviceId?: unknown },
+          frame as { code?: unknown; deviceId?: unknown; update?: unknown },
           pairing.deviceId,
         );
         if (failure) finish({ ok: false, failure });

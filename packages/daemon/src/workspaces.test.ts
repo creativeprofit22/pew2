@@ -164,7 +164,7 @@ test("the scan does not follow a symlink out of the allowlist", async () => {
   const { home, roots } = await fixture();
   const elsewhere = await realpath(await mkdtemp(join(tmpdir(), "pew2-outside-")));
   await mkdir(join(elsewhere, "private-repo", ".git"), { recursive: true });
-  await symlink(elsewhere, join(home, "linked"));
+  await symlink(elsewhere, join(home, "linked"), process.platform === "win32" ? "junction" : "dir");
 
   const found = await discoverRepos({ roots });
   expect(found.map((entry) => entry.path)).not.toContain(join(elsewhere, "private-repo"));
@@ -180,7 +180,8 @@ test("a symlink cannot be used to step outside the allowlist", async () => {
   // which passes a naive prefix check because the path it is asked about does
   // begin with home. Resolution therefore happens before the check.
   const { home, roots } = await fixture();
-  await symlink("/etc", join(home, "escape"));
+  const elsewhere = await realpath(await mkdtemp(join(tmpdir(), "pew2-escape-")));
+  await symlink(elsewhere, join(home, "escape"), process.platform === "win32" ? "junction" : "dir");
 
   expect(await resolveBrowsePath(join(home, "escape"), roots, home)).toBeUndefined();
   expect(await listDirectory(join(home, "escape"), { roots, home })).toBeUndefined();
