@@ -225,6 +225,20 @@ function rememberTurnText(session: ActiveSession, payload: unknown): void {
 }
 
 export class Daemon {
+  private readonly shutdownController = new AbortController();
+
+  private assertAcceptingWork(): void {
+    if (this.shutdownController.signal.aborted) throw new Error("Daemon is shutting down.");
+  }
+
+  /** Permanent admission revocation; closeAll remains reusable for CLI callers. */
+  shutdown(): void {
+    this.shutdownController.abort();
+    for (const pending of this.spareReady.values()) pending.announce();
+    this.spareReady.clear();
+    this.closeAll();
+  }
+
   private providers: LoadedProvider[] = [];
   private readonly sessions = new Map<string, ActiveSession>();
   private send: (message: unknown) => void = () => {};
@@ -438,9 +452,10 @@ export class Daemon {
    * only ever warm the probe's own workspace.
    */
   private async warmSpareFor(provider: LoadedProvider, cwd: string): Promise<void> {
-    if (this.spares.has(Daemon.spareKey(provider.manifest.id, cwd))) return;
+    if (this.shutdownController.signal.aborted || this.spares.has(Daemon.spareKey(provider.manifest.id, cwd))) return;
     try {
       const handle = await connectProvider({
+        signal: this.shutdownController.signal,
         provider,
         cwd,
         onUpdate: () => {},
@@ -496,7 +511,7 @@ export class Daemon {
     // Nothing is warmed for an agent that is off. Without this the daemon would
     // still boot a process for it in the background, which is most of what
     // turning it off was meant to avoid.
-    if (!this.isEnabled(providerId)) return Promise.resolve();
+    if (this.shutdownController.signal.aborted || !this.isEnabled(providerId)) return Promise.resolve();
     // Any warm process for this provider is enough to skip the boot; the
     // directory match is `takeSpare`'s business, not this one's.
     if (this.hasSpare(providerId)) {
@@ -641,6 +656,10 @@ export class Daemon {
   }
 
   private stashSpare(providerId: string, handle: AcpSessionHandle, cwd: string) {
+    if (this.shutdownController.signal.aborted) {
+      handle.close();
+      return;
+    }
     const key = Daemon.spareKey(providerId, cwd);
     const old = this.spares.get(key);
     if (old) {
@@ -782,12 +801,14 @@ export class Daemon {
       },
     };
 
+    this.assertAcceptingWork();
     let spare = this.takeSpare(provider.manifest.id, cwd);
     if (!spare) {
       // Join the background boot started alongside a disk-cached history list
       // instead of spawning a duplicate process on tap. Only the process is
       // waited for: the probe's own `session/list` keeps running behind this.
       await this.awaitSpare(provider.manifest.id);
+      this.assertAcceptingWork();
       spare = this.takeSpare(provider.manifest.id, cwd);
     }
     if (spare) {
@@ -801,7 +822,9 @@ export class Daemon {
       }
     }
     if (!session.handle) {
+      this.assertAcceptingWork();
       session.handle = await connectProvider({
+        signal: this.shutdownController.signal,
         provider,
         cwd,
         loadSessionId,
@@ -809,6 +832,10 @@ export class Daemon {
         ...agentCallbacks,
         onStderr: (line) => console.error(`[${provider.manifest.id}] ${line}`),
       });
+    }
+    if (this.shutdownController.signal.aborted) {
+      session.handle.close();
+      this.assertAcceptingWork();
     }
     loadingDuplicateReplay = false;
     // The agent's own id for the conversation, which is what the per-session
@@ -843,6 +870,7 @@ export class Daemon {
     // capability probe, which always boots in `resolveWorkspace()` — so on its
     // own it leaves the directory the user is actually working in permanently
     // cold, and every conversation there pays the spawn again.
+    this.assertAcceptingWork();
     void this.warmSpareFor(provider, cwd);
   }
 
@@ -1283,6 +1311,7 @@ export class Daemon {
   }
 
   async startSession(providerId: string, cwd: string): Promise<string> {
+    this.assertAcceptingWork();
     const provider = this.providers.find((p) => p.manifest.id === providerId);
     if (!provider) throw new Error(`Unknown provider '${providerId}'`);
     // Checked here too, not just where the list is announced. A phone that
@@ -1513,7 +1542,7 @@ export class Daemon {
     // A disabled agent answers as if it has nothing, rather than spawning to
     // find out. The app should never ask \u2014 it is not announced \u2014 but a stale
     // client or a direct CLI call must not be able to boot it either.
-    if (!this.isEnabled(providerId)) return EMPTY_CAPABILITIES;
+    if (this.shutdownController.signal.aborted || !this.isEnabled(providerId)) return EMPTY_CAPABILITIES;
     // A refresh runs *beside* the cached answer rather than replacing it up
     // front. Clearing the slot first published the in-flight reprobe to every
     // other reader: an ask arriving during a refresh waited on the agent's boot
@@ -1542,6 +1571,7 @@ export class Daemon {
     // making the drawer wait on the agent's boot time.
     if (!refresh) {
       const disk = await readProbeCache(providerId, this.env);
+      if (this.shutdownController.signal.aborted) return EMPTY_CAPABILITIES;
       // Used whatever it holds. This used to insist every row carried a message
       // count and reprobe otherwise \u2014 which was reasonable while counts came
       // from opening each conversation, and became a trap the moment that
@@ -1593,8 +1623,10 @@ export class Daemon {
     const probe = (async (): Promise<ProviderCapabilities> => {
       let handle: AcpSessionHandle | undefined;
       try {
+        this.assertAcceptingWork();
         const workspace = resolveWorkspace();
         handle = await connectProvider({
+          signal: this.shutdownController.signal,
           provider,
           // Same rule as session.start: under launchd cwd is `/`, which is not a
           // project directory. Probing from it hid every agent's sessions.
@@ -1603,6 +1635,7 @@ export class Daemon {
           onUpdate: () => {},
           onPermissionRequest: () => {},
         });
+        this.assertAcceptingWork();
         const booted = handle;
         // Published before the history below, which is the slow half: listing
         // sessions and counting each one's messages is seconds of disk work,
@@ -1752,6 +1785,7 @@ export class Daemon {
 
   /** Begin restoring immediately; callers can announce before the agent is ready. */
   beginResumeSession(providerId: string, agentSessionId: string, cwd: string) {
+    this.assertAcceptingWork();
     const provider = this.providers.find((p) => p.manifest.id === providerId);
     if (!provider) throw new Error(`Unknown provider '${providerId}'`);
     // Checked here too, not just where the list is announced. A phone that

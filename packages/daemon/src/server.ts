@@ -14,7 +14,7 @@
 import { Daemon } from "./index.js";
 import { claimPairing, loadPairing, pairingPath, pairingUrl, qrCode, tokenMatches } from "./pairing.js";
 import { watchPairing } from "./pairing-watch.js";
-import { decideClaim, type ClaimDecision } from "./device-claim.js";
+import { decideClaim, isLocalWatcher, type ClaimDecision } from "./device-claim.js";
 import { SecureChannel, e2e, envelopeHeader, wire } from "@pew2/protocol";
 import { handleMessage } from "./handler.js";
 import { RelayClient } from "./relay-client.js";
@@ -23,17 +23,22 @@ import { daemonLogPaths, rotateLog, startLogRotation } from "./logs.js";
 import { sweepOrphans } from "./children.js";
 import { startUpdateScheduler } from "./update/scheduler.js";
 import type { ServerWebSocket } from "bun";
+import { attachDesktopServices, coarseBusy, desktopMode } from "./desktop-control/runtime.js";
+import { readDesktopIdentity, readDesktopPairing } from "./desktop-control/profile.js";
+import { ControlError } from "./desktop-control/protocol.js";
 
+const ownedByDesktop = desktopMode();
+let desktopStopping = false;
 const PORT = Number(process.env.PEW2_PORT ?? 8787);
 
 // Under launchd this process's stdout is an append-only file that nothing else
 // ever trims. Done here first, before anything is written.
-const rotations = await Promise.all(daemonLogPaths().map((path) => rotateLog(path)));
+const rotations = ownedByDesktop ? [] : await Promise.all(daemonLogPaths().map((path) => rotateLog(path)));
 const trimmed = rotations.reduce((total, r) => total + (r.rotated ? r.before - r.after : 0), 0);
 
 // And again periodically. This service is started once and left alone for
 // weeks, so a startup-only pass bounds the log by restarts rather than by size.
-startLogRotation({
+if (!ownedByDesktop) startLogRotation({
   onRotate: (path, result) =>
     console.log(`[logs] trimmed ${path} by ${result.before - result.after} bytes`),
 });
@@ -41,14 +46,14 @@ startLogRotation({
 // Agents left behind by a daemon that died without running its shutdown
 // handler. Nothing inside a SIGKILL'd process can clean up after itself, so the
 // next start does it: children of daemons that are still running are untouched.
-const reaped = await sweepOrphans();
+const reaped = ownedByDesktop ? [] : await sweepOrphans();
 if (reaped.length > 0) {
   console.log(`[children] reaped ${reaped.length} orphaned agent(s) from a previous daemon`);
 }
 
 // Minted on first run and reused thereafter, so restarting the daemon does not
 // unpair the phone.
-const pairing = await loadPairing();
+const pairing = ownedByDesktop ? await readDesktopPairing() : await loadPairing();
 
 // PEW2_EXPERIMENTAL=1 also surfaces test fixtures such as the echo agent.
 const daemon = new Daemon(
@@ -199,11 +204,15 @@ function sendPlain(ws: ServerWebSocket<unknown>, message: unknown) {
   ws.send(JSON.stringify(message));
 }
 
+if (ownedByDesktop && (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535)) {
+  throw new ControlError("startup_failed");
+}
 const server = Bun.serve({
   port: PORT,
   hostname: "0.0.0.0",
 
   fetch(request, server) {
+    if (desktopStopping) return new Response("stopping", { status: 503 });
     const url = new URL(request.url);
 
     // Unauthenticated on purpose: `doctor` uses it to tell "not running" from
@@ -235,6 +244,7 @@ const server = Bun.serve({
     },
 
     async message(ws, raw) {
+      if (desktopStopping) return;
       if (typeof raw !== "string") return;
 
       const client = clients.get(ws);
@@ -368,7 +378,7 @@ const url = pairingUrl({
 // bulk of the log's growth and a copy of the pairing token in plain text on
 // disk. Four modules of quiet zone when it is drawn, because this banner is
 // scanned by a phone camera exactly as `pew2 pair` is.
-const interactive = Boolean(process.stdout.isTTY);
+const interactive = !ownedByDesktop && Boolean(process.stdout.isTTY);
 const qr = interactive ? await qrCode(url, 4) : undefined;
 
 console.log(`\npew2 daemon listening on port ${server.port}\n`);
@@ -386,7 +396,9 @@ console.log(
 // `pew2 pair --rotate` rewrites this file while the daemon is running. Watching
 // it is what stops a rotation from stranding the daemon in the old relay room,
 // where the newly paired phone can never reach it.
-const stopWatching = watchPairing(pairingPath(), pairing, () => loadPairing(), {
+// Desktop startup rejects relay profiles, but a later relay setting must never
+// suppress credential revocation. Reload identity only; do not activate a relay.
+const stopWatching = watchPairing(pairingPath(), pairing, () => ownedByDesktop ? readDesktopIdentity() : loadPairing(), {
   onPairing: (next) => {
     // Decoded first. `loadPairing` only checks the key's length, so a
     // hand-edited file can hold 64 non-hex characters and throw here — and
@@ -446,6 +458,15 @@ function releaseEverything() {
 const GRACE_MS = 500;
 
 function shutdown() {
+  if (ownedByDesktop) {
+    if (desktopStopping) return;
+    desktopStopping = true;
+    // Revoke admission in the daemon too: frames already awaiting workspace
+    // or history resolution have passed the transport's entry check.
+    daemon.shutdown();
+    // Synchronous gates prevent queued and in-flight frames starting new work.
+    void server.stop(true);
+  }
   releaseEverything();
   setTimeout(() => process.exit(0), GRACE_MS);
 }
@@ -454,6 +475,31 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   process.on(signal, shutdown);
 }
 
+attachDesktopServices({
+  status: () => ({
+    lifecycle: desktopStopping ? "stopping" : "ready",
+    bindAddress: "0.0.0.0",
+    port: server.port!,
+    // Private desktop status is phone-only; CLI watchers retain full access.
+    authenticatedConnections: [...clients.values()].filter(client =>
+      client.authenticated && client.deviceId && !isLocalWatcher(client.deviceId)).length,
+    busy: coarseBusy(daemon.busyReason()),
+  }),
+  shutdown,
+  revealPairing: async () => {
+    const { toQR } = await import("toqr");
+    const link = pairingUrl({ token: currentToken, key: e2e.toHex(rootKey), port: server.port! });
+    const flat = toQR(link);
+    const size = Math.sqrt(flat.length);
+    if (!Number.isInteger(size) || size > 177) throw new ControlError("invalid_frame");
+    return {
+      link,
+      modules: Array.from({ length: size }, (_, y) =>
+        Array.from({ length: size }, (_, x) => Boolean(flat[y * size + x]))),
+    };
+  },
+});
+
 // Keep this machine on the current release without anyone re-running the curl
 // line. Inert unless this is a compiled macOS build, because ending the process
 // is only an update where launchd starts it again — see `update/apply.ts`.
@@ -461,7 +507,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
 // The exit reuses the signal path's grace period rather than inventing a second
 // one: an update is a restart, and a restart that abandons an agent mid-write is
 // the bug `shutdown` already exists to avoid.
-startUpdateScheduler({
+if (!ownedByDesktop) startUpdateScheduler({
   busyReason: () => daemon.busyReason(),
   shutdown: releaseEverything,
   exit: (code) => setTimeout(() => process.exit(code), GRACE_MS),

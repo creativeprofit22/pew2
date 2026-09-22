@@ -108,6 +108,10 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<RunningD
   }
   Object.assign(env, {
     HOME: home,
+    // Windows homedir() uses USERPROFILE, not HOME. Keep both the provider
+    // profile and the default workspace isolated from the real developer.
+    USERPROFILE: home,
+    PEW2_HOME: join(home, ".pew2"),
     PEW2_PORT: "0",
     PEW2_TOKEN: secret,
     // Surfaces the echo agent, which is the only provider that can run with no

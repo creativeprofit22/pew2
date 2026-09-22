@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "pew2 phone access",
+  "version": "0.9.19",
+  "identifier": "dev.pew2.desktop",
+  "build": {
+    "beforeDevCommand": "bun run prepare:native && bun run dev",
+    "devUrl": "http://127.0.0.1:1432",
+    "beforeBuildCommand": "bun run prepare:native && bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "label": "main",
+      "title": "pew2 phone access",
+      "width": 560,
+      "height": 700,
+      "minWidth": 320,
+      "minHeight": 400,
+      "dragDropEnabled": false
+    }],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "useLocalToolsDir": true,
+    "licenseFile": "../../../LICENSE",
+    "externalBin": ["binaries/pew2-daemon"],
+    "icon": ["gen/icons/icon.ico", "gen/icons/icon.png"],
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": { "installMode": "currentUser", "installerHooks": "installer-hooks.nsh" },
+      "webviewInstallMode": { "type": "skip" }
+    }
+  }
+}

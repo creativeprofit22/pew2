@@ -237,6 +237,8 @@ export interface AdoptOptions {
 }
 
 export interface ConnectOptions {
+  /** Daemon lifetime: also terminates a child whose handshake is still pending. */
+  signal?: AbortSignal;
   provider: LoadedProvider;
   cwd: string;
   /** Called for every ACP `session/update` notification, in arrival order. */
@@ -504,6 +506,7 @@ export function launchSpec(
 }
 
 export async function connectProvider(options: ConnectOptions): Promise<AcpSessionHandle> {
+  options.signal?.throwIfAborted();
   const { provider, cwd } = options;
 
   // Never with a faked platform: this one actually spawns, so simulating
@@ -579,6 +582,17 @@ export async function connectProvider(options: ConnectOptions): Promise<AcpSessi
     if (exited || pid === undefined) return;
     terminateChild(pid, () => exited, graceMs);
   };
+
+  // Subscribe before the handshake, not when returning the handle: shutdown
+  // must also own children still booting. An abort during `spawned` is caught
+  // by the synchronous check after installing the listener.
+  const abort = () => stop();
+  options.signal?.addEventListener("abort", abort, { once: true });
+  child.once("exit", () => options.signal?.removeEventListener("abort", abort));
+  if (options.signal?.aborted) {
+    stop();
+    options.signal.throwIfAborted();
+  }
 
   // Always read stderr, even with no `onStderr` listener. An agent that fails to
   // hand shake explains itself there and nowhere else — `npm error ENOENT` from a

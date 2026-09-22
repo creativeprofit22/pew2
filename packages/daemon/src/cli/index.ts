@@ -718,6 +718,11 @@ async function main() {
   const flags = new Set(argv.filter((a) => a.startsWith("--")));
   const [group, command, arg] = argv.filter((a) => !a.startsWith("--"));
 
+  if (flags.has("--desktop-control")) {
+    const { serveDesktop } = await import("../desktop-control/runtime.js");
+    return serveDesktop(argv);
+  }
+
   // Before anything else: someone who installed a binary needs a way to say
   // which one they have, and it is the first thing worth asking in a bug report.
   if (flags.has("--version") || group === "version") {

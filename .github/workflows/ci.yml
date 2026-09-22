@@ -84,6 +84,49 @@ jobs:
       # that is not a bug.
       - run: bun run packages/daemon/src/cli/index.ts providers validate
 
+  # Compile the desktop shell, generated permissions and NSIS hooks as well as
+  # exercising real Windows Job ownership. No signing, install, upload or release.
+  # Headless Server CI is not Windows 11 GUI/accessibility acceptance.
+  desktop-windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1-x86_64-pc-windows-msvc
+      CARGO_HOME: ${{ runner.temp }}\desktop-cargo
+      CARGO_TARGET_DIR: ${{ runner.temp }}\desktop-target
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.20.0"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+
+      # The Windows image supplies VS 2022/MSVC and rustup. Select the tested
+      # compiler explicitly rather than inheriting the image's moving stable.
+      - name: Set up Rust MSVC with formatting and lint components
+        run: |
+          rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal --component rustfmt --component clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install locked workspace dependencies without lifecycle scripts
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate desktop and compile unsigned NSIS installer
+        run: ./.github/scripts/validate-desktop.ps1
+
   # ios/ and android/ are gitignored (CNG), so no native code is checked in and a
   # native break is invisible to typecheck. This job regenerates Android from
   # app.json and compiles it: the only check that proves the plugin set still

@@ -40,6 +40,13 @@ Coming to TestFlight. Android APK builds are in
 
 ### 2. The computer bit
 
+A [manual Windows desktop launcher](packages/desktop/README.md) is in development.
+See its [Windows guide](docs/desktop/windows-guide.md),
+[architecture](docs/desktop/architecture.md), [security boundaries](docs/desktop/security.md)
+and [verification status](docs/desktop/verification.md). A local unsigned installer
+has passed local Windows 10 installation/lifecycle checks and an authenticated
+phone Wi-Fi check. Clean Windows 11 and full accessibility acceptance remain open.
+
 Open Terminal (macOS) or PowerShell (Windows) and paste one line.
 
 **macOS and Linux**
