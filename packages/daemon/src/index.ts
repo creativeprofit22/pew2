@@ -1814,7 +1814,9 @@ export class Daemon {
     const updated = await session.handle!.setConfigOption(configId, value);
     // Only after the agent accepted it: remembering a rejected choice would
     // reapply a broken setting to every session that follows.
-    void writeConfigPref(session.providerId, configId, value).catch(() => {});
+    // The provider announcement below reads this file. Finish the write first,
+    // or a confirmed live change can broadcast the previous provider selection.
+    await writeConfigPref(session.providerId, configId, value).catch(() => {});
     // ...and against this conversation, so reopening it restores the choice
     // rather than the agent's default. Both: the provider record seeds the next
     // new session, this one survives leaving and coming back.

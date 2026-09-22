@@ -28,7 +28,7 @@ export function rememberConfigs(
   return { ...known, [providerId]: options };
 }
 
-/** Apply one chosen value to a remembered list, leaving the rest alone. */
+/** Apply one chosen value to a list; not an acknowledgement from the daemon. */
 export function withChoice(
   options: ConfigOption[],
   configId: string,
@@ -37,6 +37,24 @@ export function withChoice(
   return options.map((option) =>
     option.id === configId ? { ...option, currentValue: value } : option,
   );
+}
+
+/**
+ * Request only — even a successful socket write is not an accepted selection.
+ * The caller keeps rendering acknowledged options until the daemon replies.
+ * Unlike prompts, these requests are not queued when offline.
+ */
+export function requestConfigChoice(
+  post: (message: unknown) => boolean,
+  target: { sessionId?: string; providerId?: string },
+  configId: string,
+  value: string | boolean,
+): boolean {
+  if (target.sessionId) {
+    return post({ t: "session.config", sessionId: target.sessionId, configId, value });
+  }
+  if (!target.providerId) return false;
+  return post({ t: "provider.config", providerId: target.providerId, configId, value });
 }
 
 /**

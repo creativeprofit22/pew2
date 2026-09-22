@@ -11,7 +11,8 @@ import { expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleMessage } from "./handler.js";
+import { errorMessage, handleMessage } from "./handler.js";
+import { wire } from "@pew2/protocol";
 import { Daemon } from "./index.js";
 import { readKnownProjects } from "./known-projects.js";
 import { writeProbeCache } from "./probe-cache.js";
@@ -88,6 +89,71 @@ async function send(daemon: Daemon, message: unknown, deviceId?: string) {
   });
   return out;
 }
+
+test("a delayed prompt rejection keeps its session after another prompt starts", async () => {
+  const { daemon } = stubbed();
+  let rejectA!: (error: Error) => void;
+  const a = new Promise<void>((_, reject) => { rejectA = reject; });
+  Object.assign(daemon, {
+    prompt: (id: string) => id === "A" ? a : new Promise<void>(() => {}),
+  });
+  const out = await send(daemon, { t: "session.prompt", sessionId: "A", text: "fail later" });
+  await send(daemon, { t: "session.prompt", sessionId: "B", text: "keep running" });
+  rejectA(new Error("A failed"));
+  await a.catch(() => {});
+  await Promise.resolve();
+  expect(out.find((m) => m.t === "error")).toEqual({
+    t: "error", code: "prompt_failed", message: "A failed", sessionId: "A",
+  });
+  expect(out.find((m) => m.t === "session.idle")?.sessionId).toBe("A");
+});
+
+test("config rejection is a mutation failure scoped to the requested session", async () => {
+  const { daemon } = stubbed();
+  Object.assign(daemon, {
+    setConfigOption: async () => { throw new Error("Choice rejected"); },
+    rememberConfigOption: async () => { throw new Error("Choice rejected"); },
+  });
+  expect(await send(daemon, {
+    t: "session.config", sessionId: "A", configId: "model", value: "bad",
+  })).toEqual([{ t: "error", code: "config_failed", message: "Choice rejected", sessionId: "A" }]);
+  expect(await send(daemon, {
+    t: "provider.config", providerId: "echo", configId: "model", value: "bad",
+  })).toEqual([{ t: "error", code: "config_failed", message: "Choice rejected" }]);
+});
+
+test("the shared error mapper preserves optional identity in the wire schema", () => {
+  const scoped = errorMessage("prompt_failed", new Error("Internal error: Model unavailable"), "A");
+  expect(wire.ErrorMessage.parse(scoped)).toEqual({
+    t: "error", code: "prompt_failed", message: "Model unavailable", sessionId: "A",
+  });
+  expect(wire.ErrorMessage.parse(errorMessage("command_failed", "Failed"))).toEqual({
+    t: "error", code: "command_failed", message: "Failed",
+  });
+});
+
+test("common catch scopes cancel and permission failures without claiming a prompt ended", async () => {
+  const { daemon } = stubbed();
+  Object.assign(daemon, {
+    cancel: async () => { throw new Error("Cancel rejected"); },
+    answerPermission: () => { throw new Error("Permission rejected"); },
+  });
+  expect(await send(daemon, { t: "session.cancel", sessionId: "A" })).toEqual([
+    { t: "error", code: "command_failed", message: "Cancel rejected", sessionId: "A" },
+  ]);
+  expect(await send(daemon, {
+    t: "session.permission", sessionId: "B", requestId: "req", optionId: "allow",
+  })).toEqual([
+    { t: "error", code: "command_failed", message: "Permission rejected", sessionId: "B" },
+  ]);
+});
+
+test("invalid frames do not acquire session identity from unvalidated data", async () => {
+  const { daemon } = stubbed();
+  const out = await send(daemon, { t: "session.prompt", sessionId: "A", text: 123 });
+  expect(out[0]?.code).toBe("bad_message");
+  expect(out[0]).not.toHaveProperty("sessionId");
+});
 
 test("a session cannot be started in a directory the daemon never offered", async () => {
   const { daemon, started } = stubbed();

@@ -491,6 +491,12 @@ test("a model chosen in a conversation moves what the next one will open with", 
   const home = process.env.PEW2_HOME;
   process.env.PEW2_HOME = await mkdtemp(join(tmpdir(), "pew2-provider-config-"));
   try {
+    // A real provider already has a probe and often a previous preference.
+    // Publishing beside (rather than after) the write can announce that old value.
+    await writeConfigPref("test", "__acp_model", "sonnet");
+    (daemon as any).probes.set("test", Promise.resolve({
+      configOptions: opus.map((option) => ({ ...option, currentValue: "sonnet" })),
+    }));
     await daemon.setConfigOption("live-model", "__acp_model", "opus");
 
     const announced: any = await until(
@@ -499,6 +505,27 @@ test("a model chosen in a conversation moves what the next one will open with", 
     );
     expect(announced.providerId).toBe("test");
     expect(announced.configOptions[0].currentValue).toBe("opus");
+  } finally {
+    if (home === undefined) delete process.env.PEW2_HOME;
+    else process.env.PEW2_HOME = home;
+  }
+});
+
+test("a rejected live selector leaves provider preferences and broadcasts unchanged", async () => {
+  const { daemon, sent } = daemonWithCollector();
+  const session: any = plantSession(daemon, "rejected-model");
+  session.handle = {
+    setConfigOption: async () => { throw new Error("Model unavailable"); },
+  } as unknown as AcpSessionHandle;
+
+  const home = process.env.PEW2_HOME;
+  process.env.PEW2_HOME = await mkdtemp(join(tmpdir(), "pew2-rejected-config-"));
+  try {
+    await writeConfigPref("test", "__acp_model", "sonnet");
+    await expect(daemon.setConfigOption("rejected-model", "__acp_model", "opus"))
+      .rejects.toThrow("Model unavailable");
+    expect(await readConfigPrefs("test")).toEqual({ __acp_model: "sonnet" });
+    expect(sent.filter((message: any) => message.t === "provider.config")).toEqual([]);
   } finally {
     if (home === undefined) delete process.env.PEW2_HOME;
     else process.env.PEW2_HOME = home;

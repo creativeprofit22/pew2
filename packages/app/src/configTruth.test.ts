@@ -1,6 +1,16 @@
 import { expect, test } from "bun:test";
-import { rememberConfigs, visibleConfigs, withChoice } from "./configTruth";
+import { rememberConfigs, requestConfigChoice, visibleConfigs, withChoice } from "./configTruth";
 import type { ConfigOption } from "./useDaemon";
+
+// Keep the hook's write boundary covered too: pure truth rules cannot prevent
+// an action from bypassing them and optimistically overwriting the cache.
+test("selector requests never write the acknowledged provider cache", async () => {
+  const source = await Bun.file(new URL("./useDaemon.ts", import.meta.url)).text();
+  const action = source.slice(source.indexOf("setConfig: ("), source.indexOf("/** Reopen a past conversation"));
+  expect(action).not.toContain("setKnownConfigs");
+  expect(action).not.toContain("withChoice");
+  expect(action).toContain("return requestConfigChoice(post,");
+});
 
 const model = (currentValue: string): ConfigOption[] => [
   {
@@ -57,6 +67,80 @@ test("a choice is applied to the remembered list, and only to its own selector",
 
   expect(next[0]?.currentValue).toBe("opus");
   expect(next[1]?.currentValue).toBe("high");
+});
+
+test("offline empty-state choices are refused, leaving the acknowledged model visible", () => {
+  const known = { ggcoder: model("sonnet") };
+  let attempts = 0;
+  const post = (_message: unknown) => { attempts += 1; return false; };
+
+  expect(requestConfigChoice(post, { providerId: "ggcoder" }, "__acp_model", "opus")).toBe(false);
+  expect(attempts).toBe(1);
+  expect(visibleConfigs({ session: [], provider: known.ggcoder, inConversation: false })[0]?.currentValue)
+    .toBe("sonnet");
+});
+
+test("sending a live option is not acceptance and cannot change the next conversation", () => {
+  const known = { ggcoder: model("sonnet") };
+  const session = model("sonnet");
+  const sent: unknown[] = [];
+  const post = (message: unknown) => { sent.push(message); return true; };
+
+  expect(requestConfigChoice(post, { sessionId: "live", providerId: "ggcoder" }, "__acp_model", "opus"))
+    .toBe(true);
+  expect(sent).toEqual([{ t: "session.config", sessionId: "live", configId: "__acp_model", value: "opus" }]);
+  // A rejection supplies no authoritative config update. Neither view commits
+  // the requested value, so there is no speculative state to roll back.
+  expect(visibleConfigs({ session, provider: known.ggcoder, inConversation: true })[0]?.currentValue)
+    .toBe("sonnet");
+  expect(visibleConfigs({ session: [], provider: known.ggcoder, inConversation: false })[0]?.currentValue)
+    .toBe("sonnet");
+});
+
+test("an accepted provider broadcast, not the outgoing request, commits the empty-state model", () => {
+  let known = { ggcoder: model("sonnet") };
+  const sent: unknown[] = [];
+  expect(requestConfigChoice((message) => { sent.push(message); return true; },
+    { providerId: "ggcoder" }, "__acp_model", "opus")).toBe(true);
+  expect(sent).toEqual([{ t: "provider.config", providerId: "ggcoder", configId: "__acp_model", value: "opus" }]);
+  expect(known.ggcoder[0]?.currentValue).toBe("sonnet");
+
+  known = rememberConfigs(known, "ggcoder", model("opus")) as typeof known;
+  expect(visibleConfigs({ session: [], provider: known.ggcoder, inConversation: false })[0]?.currentValue)
+    .toBe("opus");
+});
+
+test.each(["sonnet", "opus"])("reconnect uses the daemon's %s selection after a lost acknowledgement", (acknowledgedModel) => {
+  let known = { ggcoder: model("sonnet") };
+  const sent: unknown[] = [];
+  let connected = true;
+  const post = (message: unknown) => {
+    if (!connected) return false;
+    sent.push(message);
+    return true;
+  };
+  requestConfigChoice(post, { providerId: "ggcoder" }, "__acp_model", "opus");
+  connected = false;
+  expect(requestConfigChoice(post, { providerId: "ggcoder" }, "__acp_model", "opus")).toBe(false);
+  expect(known.ggcoder[0]?.currentValue).toBe("sonnet");
+
+  // The first write may or may not have reached the daemon. Reconnection's
+  // capabilities decide; the app must neither guess nor retry a stale choice.
+  connected = true;
+  known = rememberConfigs(known, "ggcoder", model(acknowledgedModel)) as typeof known;
+  post({ t: "session.start", providerId: "ggcoder", requestId: "first" });
+  expect(sent).toHaveLength(2);
+  expect(sent[1]).toEqual({ t: "session.start", providerId: "ggcoder", requestId: "first" });
+  expect(visibleConfigs({ session: [], provider: known.ggcoder, inConversation: false })[0]?.currentValue)
+    .toBe(acknowledgedModel);
+});
+
+test("config requests preserve boolean values and require a target", () => {
+  const sent: unknown[] = [];
+  const post = (message: unknown) => { sent.push(message); return true; };
+  expect(requestConfigChoice(post, {}, "fast", true)).toBe(false);
+  expect(requestConfigChoice(post, { providerId: "ggcoder" }, "fast", true)).toBe(true);
+  expect(sent).toEqual([{ t: "provider.config", providerId: "ggcoder", configId: "fast", value: true }]);
 });
 
 test("an empty announcement never erases what is known", () => {

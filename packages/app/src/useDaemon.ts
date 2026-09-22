@@ -29,7 +29,7 @@ import {
   remapSession,
   type OutboxEntry,
 } from "./outbox";
-import { rememberConfigs, visibleConfigs, withChoice } from "./configTruth";
+import { rememberConfigs, requestConfigChoice, visibleConfigs } from "./configTruth";
 import {
   beginActivity,
   foldActivity,
@@ -40,7 +40,7 @@ import {
   type TurnReceipt,
 } from "./activity";
 import { advance, alreadySeen, type Cursors } from "./cursors";
-import { findDuplicateError } from "./errorDedup";
+import { foldSessionError } from "./sessionErrors";
 import { isEmptyChunk, readChunk } from "./chunks";
 import type { ChatImage } from "./images";
 import { emptyImageCache, putImage, type ImageCache } from "./imageCache";
@@ -1319,7 +1319,9 @@ export function useDaemon(
         //
         // `session.idle` is deliberately absent: it is the only signal that a
         // conversation left running has finished, which is precisely the one
-        // nobody is looking at. It is applied per session instead.
+        // nobody is looking at. It is applied per session instead. Errors also
+        // reach their reducer: it files them in the owning session, including
+        // background failures, rather than dropping them or touching this turn.
         const scoped = message.t === "session.event" || message.t === "session.config";
         if (scoped && message.sessionId !== sessionRef.current) {
           // Not on screen, but it is still someone's conversation. Its chunks go
@@ -1898,53 +1900,8 @@ export function useDaemon(
               return { ...base, turns: capped, sessions, busy: chunk.role !== "system" };
             }
 
-            case "error": {
-              // A desktop older than this app does not know an optional request
-              // (the workspace bar's, first of all). That is not a failure of
-              // anything the user did: rendering it would drop a system turn
-              // into the transcript and clear `busy` mid-stream, killing the
-              // spinner on a turn that is still running. The bar simply stays
-              // empty until that daemon is updated.
-              //
-              // One thing must still be undone: a `provider.sessions` this
-              // daemon cannot answer would otherwise leave the drawer on its
-              // skeleton forever — an endless spinner over the project whose
-              // conversations are the one thing an old daemon cannot list.
-              // Falling back to the history already held is the honest state.
-              if (message.code === "unknown_message") {
-                return prev.loadingProject === undefined
-                  ? prev
-                  : { ...prev, loadingProject: undefined };
-              }
-
-              // Agents usually stream a failure as message text and then reject
-              // the turn, so the same sentence arrives twice. Promote the copy
-              // already on screen instead of appending a second one: the user
-              // sees it once, and in the colour that says it failed.
-              const duplicate = findDuplicateError(prev.turns, message.message);
-              if (duplicate >= 0) {
-                const turns = [...prev.turns];
-                // Keep the agent's own wording, which may carry more context
-                // than the rejection; only its severity was wrong.
-                turns[duplicate] = { ...turns[duplicate]!, role: "system" };
-                return { ...prev, busy: false, loadingSession: false, turns };
-              }
-              return {
-                ...prev,
-                busy: false,
-                loadingSession: false,
-                turns: capTurns([
-                  ...prev.turns,
-                  // Date.now() collides when two errors land in the same
-                  // millisecond; the length keeps it unique within the thread.
-                  {
-                    id: `err-${prev.turns.length}-${Date.now()}`,
-                    role: "system",
-                    text: message.message,
-                  },
-                ]),
-              };
-            }
+            case "error":
+              return foldSessionError(prev, message, now);
 
             default:
               return prev;
@@ -2389,32 +2346,12 @@ export function useDaemon(
         }));
       },
 
-      /** Change a model, thinking level or mode on the open session. */
+      /** Request a selector change; only daemon replies commit displayed values. */
       setConfig: (configId: string, value: string | boolean) => {
-        const sessionId = sessionRef.current;
-        const providerId = providerRef.current ?? targetProviderRef.current;
-        // Chosen in a live conversation or in the empty state, this is now what
-        // the *next* conversation opens with too: the daemon records either
-        // against the provider. Applied locally so the empty state is already
-        // right the moment you leave this one, rather than a round trip later.
-        if (providerId) {
-          setKnownConfigs((known) => ({
-            ...known,
-            [providerId]: withChoice(known[providerId] ?? [], configId, value),
-          }));
-        }
-        if (sessionId) {
-          post({ t: "session.config", sessionId, configId, value });
-          return;
-        }
-
-        // Nothing to set it on yet: a conversation is only created by its first
-        // prompt, so before then the daemon holds the choice against the
-        // provider and the new session opens with it applied. Without this the
-        // pill in the empty state silently did nothing until you had sent a
-        // message — the one moment you are most likely to be choosing a model.
-        if (!providerId) return;
-        post({ t: "provider.config", providerId, configId, value });
+        return requestConfigChoice(post, {
+          sessionId: sessionRef.current,
+          providerId: providerRef.current ?? targetProviderRef.current,
+        }, configId, value);
       },
 
       /** Reopen a past conversation from the sidebar. */

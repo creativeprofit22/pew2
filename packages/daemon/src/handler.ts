@@ -65,8 +65,11 @@ async function namedProject(daemon: Daemon, providerId: string, cwd: string): Pr
  * provider passes through, so a readable failure is a property of the daemon
  * rather than something each client has to reimplement.
  */
-export function errorMessage(code: string, error: unknown) {
-  return { t: "error", code, message: humanError(error) };
+export function errorMessage(code: string, error: unknown, sessionId?: string) {
+  return {
+    t: "error", code, message: humanError(error),
+    ...(sessionId === undefined ? {} : { sessionId }),
+  };
 }
 
 /**
@@ -237,10 +240,7 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
             daemon.finishStreaming(pending.sessionId);
           })
           .catch((error) => {
-            broadcast({
-              ...errorMessage("resume_failed", error),
-              sessionId: pending.sessionId,
-            });
+            broadcast(errorMessage("resume_failed", error, pending.sessionId));
             daemon.finishStreaming(pending.sessionId);
           });
         break;
@@ -292,7 +292,7 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         const sessionId = message.sessionId;
         daemon
           .prompt(sessionId, message.text, attachments)
-          .catch((error) => reply(errorMessage("prompt_failed", error)))
+          .catch((error) => reply(errorMessage("prompt_failed", error, sessionId)))
           // Tell every client the turn is over, so they can stop showing a
           // working indicator. Broadcast, not reply: other devices watching this
           // session need it too.
@@ -500,6 +500,12 @@ export async function handleMessage(raw: string, ctx: HandlerContext): Promise<v
         return;
     }
   } catch (error) {
-    reply(errorMessage("command_failed", error));
+    // Mutations do not end a prompt. Keep their code distinct even for a
+    // provider choice made before a session exists. Only validated messages
+    // supply identity; malformed/connection failures remain unscoped.
+    const code = message.t === "session.config" || message.t === "provider.config"
+      ? "config_failed"
+      : message.t === "session.prompt" ? "prompt_failed" : "command_failed";
+    reply(errorMessage(code, error, "sessionId" in message ? message.sessionId : undefined));
   }
 }

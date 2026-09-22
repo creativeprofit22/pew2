@@ -1551,7 +1551,14 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
               : []
             : daemon.configOptions.filter((option) => option.id !== mode?.id)
         }
-        onSelect={daemon.setConfig}
+        onSelect={(configId, value) => {
+          if (!daemon.setConfig(configId, value)) {
+            Alert.alert(
+              "Selection not changed",
+              "Reconnect to your computer, then choose again. Your previous selection is unchanged.",
+            );
+          }
+        }}
       />
 
       {/* Last of every overlay on purpose. All the sheets share one zIndex, so
