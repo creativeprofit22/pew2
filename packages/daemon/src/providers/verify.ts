@@ -1,11 +1,11 @@
 /**
  * Provider verification, as a function rather than a printer.
  *
- * `verify` is the only thing in pew2 that proves a provider actually works: it
- * spawns the process, completes the ACP handshake, sends a real prompt and
- * counts what came back. That makes it the pass/fail signal a coding agent
- * needs, so it has to be callable — and structured — rather than console output
- * to be scraped.
+ * `verify` checks process spawn, the ACP handshake and session creation, and
+ * reports any session updates received during startup. It sends no prompt and
+ * makes no model call. Success does not establish working model authentication,
+ * entitlement or a completed response. The report is structured so callers do
+ * not have to scrape console output.
  */
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,11 +21,12 @@ export interface VerifyReport {
   /** The agent's own session id. Present only on success. */
   sessionId?: string;
   /**
-   * How many `session/update` notifications arrived.
+   * How many `session/update` notifications arrived during startup.
    *
-   * Zero with `status: "ok"` is the interesting case: the process started and
-   * answered the handshake but streamed nothing, which almost always means it
-   * is not really in ACP mode.
+   * Zero with `status: "ok"` is valid: verification sends no prompt. Success
+   * establishes only spawn, ACP handshake and session creation; neither success
+   * nor this count establishes working model authentication, entitlement or a
+   * completed response.
    */
   updates?: number;
   /** Why it failed, or why it was skipped. */
@@ -116,13 +117,12 @@ export async function verifyProvider(
         // two clocks disagreeing about who owns the process, which is exactly
         // how it came to be left running.
         handshakeTimeoutMs: timeoutMs,
-        // A scratch directory, not the user's. Verification really starts each
-        // agent and sends it a prompt, and agents write files where they are
-        // pointed — running `pew2 setup` inside a project left junk in it, which
-        // is a rude thing for a health check to do.
+        // A scratch directory, not the user's. Verification starts each agent
+        // and opens a session; agents may write startup files where they are
+        // pointed even without a prompt. Keep those files out of the project.
         cwd: options.cwd ?? scratchDir(),
         onUpdate: (payload) => updates.push(payload),
-        // Auto-approve during verification so the round trip can complete.
+        // Auto-approve permission requests during startup; no prompt is sent.
         onPermissionRequest: ({ requestId }) => handle?.answerPermission(requestId, "allow"),
       });
       // The timeout may already have won, in which case `finally` has been and
@@ -215,7 +215,7 @@ export function describe(error: unknown): string {
 /**
  * How many agents to start at once.
  *
- * Verification spawns each agent for real and waits on a network round trip, so
+ * Verification spawns each agent for real and waits for ACP session creation, so
  * running them one at a time made `pew2 setup` take the sum of every agent's
  * startup — forty seconds on a normal machine, which is long enough that people
  * assume it has hung.

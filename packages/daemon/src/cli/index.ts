@@ -14,10 +14,10 @@
  *   pew2 providers list              what is installed, and is it usable
  *   pew2 providers validate          static check of every manifest
  *   pew2 providers add <id>          scaffold a new manifest
- *   pew2 providers verify <id>       actually spawn it and prove it works
+ *   pew2 providers verify <id>       spawn, handshake and create an ACP session
  *
- * `verify` is the important one: it is the difference between "the JSON parsed"
- * and "this thing genuinely speaks ACP and answered me".
+ * `verify` goes beyond parsing JSON: it checks spawn, ACP handshake and session
+ * creation, not model authentication, entitlement or a completed response.
  *
  * Every command that a coding agent is expected to drive takes `--json`, so it
  * can act on structured state instead of parsing decorated console output.
@@ -764,7 +764,8 @@ async function main() {
     console.log("  pew2 providers validate          Validate every manifest");
     console.log("  pew2 --version                   Which build this is");
     console.log("  pew2 providers add <id>          Scaffold a new manifest");
-    console.log("  pew2 providers verify [id]       Spawn a provider and prove it speaks ACP");
+    console.log("  pew2 providers verify [id]       Spawn, ACP handshake and session creation only");
+    console.log("    No prompt or model call; success does not verify model authentication, entitlement or a completed response.");
     console.log("  pew2 providers disable <id>      Hide an agent from the phone");
     console.log("  pew2 providers enable <id>       Show it again");
     return group ? 1 : 0;

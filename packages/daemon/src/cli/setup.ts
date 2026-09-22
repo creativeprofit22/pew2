@@ -53,10 +53,10 @@ export interface SetupOptions {
    */
   searchDirs?: string[];
   /**
-   * Verification spawns every agent and prompts it for real, which costs
-   * seconds and may hit the network. Skippable so a re-run after a small fix is
-   * fast, but it is on by default: a manifest that has not been verified has
-   * proven nothing.
+   * Verification spawns agents, completes the ACP handshake and creates a
+   * session without sending a prompt or making a model call. Startup costs
+   * seconds and may hit the network. On by default, but skippable for fast
+   * re-runs; success does not verify model authentication or entitlement.
    */
   verify?: boolean;
   probeDaemon?: (url: string) => Promise<boolean>;
