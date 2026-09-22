@@ -11,7 +11,6 @@ import {
   applyTranscript,
   beginDictation,
   dictationMessage,
-  type DictationState,
 } from "../transcription";
 import { speechAvailable, startDictation, type DictationSession } from "./speech";
 import { haptics } from "./haptics";
@@ -35,8 +34,8 @@ export interface Dictation {
 
 export function useDictation({ draft, onDraftChange, onMessage }: UseDictationOptions): Dictation {
   const [listening, setListening] = useState(false);
-  const session = useRef<DictationSession | undefined>(undefined);
-  const state = useRef<DictationState>(beginDictation(""));
+  // Identity owns callbacks even while permission is pending or stop awaits end.
+  const session = useRef<{ handle?: DictationSession } | undefined>(undefined);
   // Read at start rather than captured in a dep: the draft changes on every
   // keystroke and restarting listeners for that would drop audio mid-word.
   const draftRef = useRef(draft);
@@ -62,8 +61,9 @@ export function useDictation({ draft, onDraftChange, onMessage }: UseDictationOp
 
   const stopSession = useCallback(() => {
     wanted.current = false;
-    session.current?.cancel();
-    session.current = undefined;
+    const previous = session.current;
+    session.current = undefined; // Invalidate before cancel can deliver callbacks.
+    previous?.handle?.cancel();
     setListening(false);
   }, []);
 
@@ -75,28 +75,37 @@ export function useDictation({ draft, onDraftChange, onMessage }: UseDictationOp
       wanted.current = false;
       // A deliberate stop asks for the final result, so the last few words the
       // recogniser had not committed still land in the draft.
-      session.current?.stop();
-      session.current = undefined;
+      if (session.current?.handle) {
+        session.current.handle.stop();
+      } else {
+        // A pending permission has no final to collect. Cancel it on arrival.
+        session.current = undefined;
+      }
       setListening(false);
       haptics.finished();
       return;
     }
 
+    stopSession();
+    const owner: { handle?: DictationSession } = {};
+    session.current = owner;
     wanted.current = true;
-    state.current = beginDictation(draftRef.current());
+    let state = beginDictation(draftRef.current());
     setListening(true);
     haptics.sent();
 
     void startDictation({
       onTranscript: (transcript) => {
-        const next = applyTranscript(state.current, transcript);
-        state.current = next.state;
+        // An empty final result can arrive when the recogniser stops. Keep the
+        // words already in the draft instead of resetting to the starting text.
+        if (session.current !== owner || !transcript.trim()) return;
+        const next = applyTranscript(state, transcript);
+        state = next.state;
         changeRef.current(next.draft);
       },
       onError: (code) => {
-        wanted.current = false;
-        session.current = undefined;
-        setListening(false);
+        if (session.current !== owner) return;
+        stopSession();
         const message = dictationMessage(code);
         if (message) {
           messageRef.current(message);
@@ -104,27 +113,25 @@ export function useDictation({ draft, onDraftChange, onMessage }: UseDictationOp
         }
       },
       onEnd: () => {
+        if (session.current !== owner) return;
         wanted.current = false;
         session.current = undefined;
         setListening(false);
       },
     }).then((started) => {
+      if (session.current !== owner) {
+        started?.cancel();
+        return;
+      }
       if (!started) {
         // Permission refused, or the module is missing. `onError` has already
         // said so; this only clears the optimistic listening state.
-        wanted.current = false;
-        setListening(false);
+        stopSession();
         return;
       }
-      // Tapped off while the permission dialog was up: the recogniser started
-      // anyway and would otherwise hold the microphone with nothing watching.
-      if (!wanted.current) {
-        started.cancel();
-        return;
-      }
-      session.current = started;
+      owner.handle = started;
     });
-  }, []);
+  }, [stopSession]);
 
   // Memoized: `Composer` is memoized precisely because streamed chunks
   // re-render this screen many times a second, and a fresh object here would
