@@ -76,10 +76,11 @@ import {
 import { readPermissionRequest } from "./permissions";
 import {
   pairingFailure,
-  pairingRefusalForDevice,
   recordPairingFailure,
   type PairingFailure,
 } from "./pairingFailure";
+
+import { attachDaemonConnection } from "./daemonConnection";
 
 export type Status = "connecting" | "online" | "offline";
 
@@ -281,25 +282,6 @@ const STALLED_ATTEMPTS = 4;
  */
 const LOADING_SESSION_TIMEOUT = 20_000;
 
-/**
- * How long a socket may stay in CONNECTING before it is treated as dead.
- *
- * Ten seconds is well past any real handshake, including a relay cold start,
- * and well short of the operating system's own connect timeout — which is the
- * point. The platform does eventually give up; it just does so on a timescale
- * where the user has already decided the app is broken.
- */
-const CONNECT_TIMEOUT = 10_000;
-
-/**
- * `WebSocket.CONNECTING`, by value.
- *
- * React Native's WebSocket is not the DOM one, and the static constants are
- * absent on some engines while the instance `readyState` is always the same
- * standard number. Comparing against the literal is the portable form, and the
- * name is what keeps it readable.
- */
-const WEBSOCKET_CONNECTING = 0;
 
 interface State {
   status: Status;
@@ -570,13 +552,10 @@ export function useDaemon(
   url: string,
   deviceId = "phone",
   /**
-   * The pairing key, hex. Every frame is sealed with it.
-   *
-   * Empty means unpaired: the socket is never opened, because a connection with
-   * nothing to encrypt with could only fail at the far end — and would look to
-   * the user like a broken daemon rather than a missing pairing.
+   * Required validated hex key from Pairing.key. Every frame is sealed with it.
+   * Only mount this hook after pairing; it does not support an unpaired mode.
    */
-  pairingKey = "",
+  pairingKey: string,
   options: DaemonOptions = {},
 ) {
   const [state, setState] = useState<State>({
@@ -884,8 +863,10 @@ export function useDaemon(
       s.unreachable || s.fatal ? { ...s, unreachable: undefined, fatal: undefined } : s,
     );
 
+    let detachConnection: (() => void) | undefined;
     const connect = () => {
-      if (!alive.current) return;
+      if (!alive.current || fatal.current) return;
+      detachConnection?.();
       setState((s) => ({ ...s, status: "connecting" }));
 
       const ws = new WebSocket(url);
@@ -904,8 +885,8 @@ export function useDaemon(
       /**
        * Deliver everything typed while there was nowhere to send it.
        *
-       * Called once the channel is proven — the first sealed frame back, not
-       * merely an open socket — and again whenever a conversation gains the id
+       * Called after providers establishes activeSessions on the proven channel,
+       * and again whenever a conversation gains the id
        * its waiting messages are addressed to. See `outbox.ts`.
        */
       const flushOutbox = () => {
@@ -1012,10 +993,7 @@ export function useDaemon(
         });
       };
 
-      ws.onopen = () => {
-        clearTimeout(deadline);
-        attempts.current = 0;
-        stalledVisible.current = false;
+      const onOpen = () => {
         // A request written to the socket that died is never answered, and its
         // entry would hold the drawer in a skeleton forever. Dropping them here
         // also lets the open project be asked for again.
@@ -1028,9 +1006,6 @@ export function useDaemon(
         awaitingResume.current = false;
         setState((s) => ({
           ...s,
-          status: "online",
-          // Whatever it was, it is reachable now.
-          unreachable: undefined,
           // Turns end while the phone is asleep and the socket is dead, and
           // `session.idle` is not replayed — only `session.event` is persisted.
           // So anything believed to be working across a drop is a guess, and
@@ -1060,45 +1035,7 @@ export function useDaemon(
         );
       };
 
-      ws.onmessage = (event) => {
-        let frame: unknown;
-        try {
-          frame = JSON.parse(event.data as string);
-        } catch {
-          return;
-        }
-
-        // A cleartext frame from the daemon or the relay. Only two are acted on,
-        // and neither carries user content: a version mismatch, and the refusal
-        // that follows a proof the daemon would not accept. Both have to be
-        // readable *before* anything can be decrypted, which is exactly why they
-        // are the ones left in the open.
-        const kind = (frame as { t?: unknown } | null)?.t;
-        if (kind === "error") {
-          // Relay cleartext is broadcast room-wide. Device and version refusals
-          // are fatal only when explicitly addressed to this phone; legacy
-          // `unpaired` remains valid because LAN delivers it on one socket.
-          const failure = pairingRefusalForDevice(
-            frame as { code?: unknown; deviceId?: unknown; update?: unknown },
-            deviceId,
-          );
-          if (failure && !fatal.current) {
-            fatal.current = true;
-            recordPairingFailure(failure);
-            // Nothing will ever be fetched from that machine again, and these
-            // are pictures of its filesystem. Forget them with the pairing.
-            clearImages();
-            setState((s) => ({ ...s, status: "offline", fatal: failure }));
-          }
-          return;
-        }
-        if (kind !== "e") return;
-
-        const message: any = secure.open(frame);
-        // Undecryptable: a stray frame, a replay, or traffic from a pairing this
-        // phone no longer holds the key for. Silently ignored — there is nothing
-        // useful to show and nothing safe to act on.
-        if (message === undefined) return;
+      const onMessage = (message: any) => {
 
         // Replayed history, after a reconnect or a resume. Progressive batches
         // make long transcripts visible from the top while the agent continues
@@ -1944,30 +1881,26 @@ export function useDaemon(
         retry.current = setTimeout(connect, delay);
       };
 
-      // A socket that never finishes connecting, and never fails either.
-      //
-      // The handshake reaches out over whatever the phone last had, and a
-      // network that changed underneath it — wifi to cellular, a captive
-      // portal, a VPN coming up — leaves the TCP connection half open: nothing
-      // is coming back, but nothing has been refused, so `onclose` and
-      // `onerror` are never called and the backoff below never runs. iOS will
-      // eventually time it out on its own schedule, which is measured in
-      // minutes and looks exactly like the app having given up silently. This
-      // is the deadline the platform does not give.
-      //
-      // Closing it is enough to start recovery: `onclose` follows, which is the
-      // same path a refused connection takes, so the attempt counts towards the
-      // backoff and towards `unreachable` like any other failure.
-      const deadline = setTimeout(() => {
-        if (socket.current !== ws || ws.readyState !== WEBSOCKET_CONNECTING) return;
-        ws.close();
-      }, CONNECT_TIMEOUT);
-
-      ws.onclose = () => {
-        clearTimeout(deadline);
-        scheduleReconnect();
-      };
-      ws.onerror = () => ws.close();
+      detachConnection = attachDaemonConnection(ws, {
+        secure,
+        deviceId,
+        isCurrent: () => alive.current && socket.current === ws && !fatal.current,
+        onOpen,
+        onMessage,
+        onOnline: () => {
+          attempts.current = 0;
+          stalledVisible.current = false;
+          setState((s) => ({ ...s, status: "online", unreachable: undefined }));
+        },
+        onRefusal: (failure) => {
+          fatal.current = true;
+          recordPairingFailure(failure);
+          // These are pictures of the refused machine's filesystem.
+          clearImages();
+          setState((s) => ({ ...s, status: "offline", fatal: failure }));
+        },
+        onDisconnect: scheduleReconnect,
+      });
     };
 
     connect();
@@ -2007,6 +1940,7 @@ export function useDaemon(
 
     return () => {
       alive.current = false;
+      detachConnection?.();
       resume.current = undefined;
       if (retry.current) clearTimeout(retry.current);
       const ws = socket.current;
