@@ -264,7 +264,13 @@ export function lanAddresses(): string[] {
 
       // Prefer the interface most likely to be the one the phone shares: real
       // Wi-Fi/Ethernet over the virtual bridges Docker and VMs leave behind.
-      const rank = /^(en|eth|wl)/.test(name) ? 0 : /^(bridge|docker|veth|utun|tun|tap)/.test(name) ? 2 : 1;
+      // Names are only a heuristic, not a reachability guarantee (adapters can
+      // be renamed). Keep virtual adapters as fallbacks, including Windows
+      // vEthernet (WSL/Hyper-V), and preserve enumeration order within a rank.
+      const normalized = name.toLowerCase();
+      const rank = /^(bridge|docker|veth|hyper-v|utun|tun|tap)/.test(normalized)
+        ? 2
+        : /^(en|eth|wl|wi-fi)/.test(normalized) ? 0 : 1;
       found.push({ address: entry.address, rank });
     }
   }

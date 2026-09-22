@@ -6,12 +6,14 @@
  * and unpredictable, it survives a restart, comparing it does not leak its
  * contents through timing, and a diagnosis never mints one by accident.
  */
-import { test, expect } from "bun:test";
+import { test, expect, spyOn } from "bun:test";
 import { mkdtemp, readFile, stat, writeFile, mkdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import * as os from "node:os";
+import { tmpdir, type NetworkInterfaceInfo } from "node:os";
 import { join } from "node:path";
 import {
   generatePairing,
+  lanAddresses,
   loadPairing,
   pairingFromToken,
   pairingPath,
@@ -198,6 +200,59 @@ test("the pairing url round-trips through the app's parser", () => {
   expect(tokenFromUrl("not a url")).toBeNull();
   expect(tokenFromUrl("ws://192.168.1.24:8787/")).toBeNull();
 });
+
+function ipv4(address: string, internal = false): NetworkInterfaceInfo {
+  return { address, internal, family: "IPv4", netmask: "255.255.255.0", mac: "00:00:00:00:00:00", cidr: null };
+}
+
+const physicalInterfaces = ["Ethernet", "Wi-Fi", "eThErNeT 2", "wI-fI 2", "en0", "eth0", "wlan0"];
+const virtualInterfaces = [
+  "vEthernet (WSL)", "vEthernet (Default Switch)", "vEthernet (Hyper-V)",
+  "Hyper-V Virtual Ethernet Adapter", "VeThErNeT (WSL)", "hYpEr-V adapter",
+  "bridge0", "docker0", "veth0", "utun0", "tun0", "tap0",
+];
+
+for (const physical of physicalInterfaces) {
+  for (const virtual of virtualInterfaces) {
+    test(`LAN selection prefers ${physical} over ${virtual} in either enumeration order`, () => {
+      const interfaces = spyOn(os, "networkInterfaces");
+      try {
+        for (const virtualFirst of [true, false]) {
+          const entries: [string, NetworkInterfaceInfo[]][] = [
+            [virtual, [ipv4("172.28.0.1")]],
+            ["Unknown adapter", [ipv4("192.168.50.1")]],
+            [physical, [ipv4("192.168.100.7")]],
+          ];
+          interfaces.mockReturnValue(Object.fromEntries(virtualFirst ? entries : entries.reverse()));
+          expect(lanAddresses()).toEqual(["192.168.100.7", "192.168.50.1", "172.28.0.1"]);
+          expect(new URL(pairingUrl({ token: FIXED, port: 8787 })).hostname).toBe("192.168.100.7");
+          expect(new URL(pairingUrl({ token: FIXED, port: 8787, host: "192.168.100.99" })).hostname)
+            .toBe("192.168.100.99");
+        }
+      } finally {
+        interfaces.mockRestore();
+      }
+    });
+  }
+}
+
+for (const virtual of virtualInterfaces) {
+  test(`LAN selection retains ${virtual} as a virtual-only fallback`, () => {
+    const interfaces = spyOn(os, "networkInterfaces").mockReturnValue({
+      [virtual]: [ipv4("172.28.0.1")],
+      Ethernet: [ipv4("169.254.1.2")],
+      Loopback: [ipv4("127.0.0.1", true)],
+      "Wi-Fi": [{ ...ipv4("fe80::1"), family: "IPv6", scopeid: 0 }],
+      Missing: undefined,
+    });
+    try {
+      expect(lanAddresses()).toEqual(["172.28.0.1"]);
+      expect(new URL(pairingUrl({ token: FIXED, port: 8787 })).hostname).toBe("172.28.0.1");
+    } finally {
+      interfaces.mockRestore();
+    }
+  });
+}
 
 test("the quiet zone can be widened for a code a camera has to find", async () => {
   // Scanners locate the finder patterns by the margin around them, and the QR
