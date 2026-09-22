@@ -38,9 +38,17 @@ module.exports = () => {
   const local = localIdentity();
   const owner = process.env.EAS_OWNER ?? local.owner;
   const projectId = process.env.EAS_PROJECT_ID ?? local.projectId;
+  // Personal build input only: absent means the upstream config is unchanged.
+  const lanHost = process.env.PEW2_ANDROID_LAN_HOST;
+  if (lanHost !== undefined) {
+    require("./plugins/withPersonalAndroidLan").validateLanHost(lanHost);
+  }
 
   return {
     ...expo,
+    ...(lanHost !== undefined
+      ? { plugins: [...(expo.plugins ?? []), ["./plugins/withPersonalAndroidLan", { host: lanHost }]] }
+      : {}),
     ...(owner ? { owner } : {}),
     ...(projectId
       ? { extra: { ...expo.extra, eas: { ...expo.extra?.eas, projectId } } }
