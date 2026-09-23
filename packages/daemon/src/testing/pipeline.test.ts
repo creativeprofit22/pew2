@@ -350,6 +350,63 @@ test("a provider never holds more than one warm process", async () => {
   }
 }, 60_000);
 
+test("a plan sent during session/load survives being reopened, unlike duplicate chat text", async () => {
+  // The bug: `session/load` replay is suppressed on reopen because the disk
+  // cache already fast-painted the chat text, but that suppression used to
+  // apply to *every* update kind the agent sent while reconnecting — including
+  // a `plan` notification, which no fast-paint loader ever substitutes for.
+  // First open has nothing cached, so it always worked; only a second open,
+  // once a transcript exists, exercised the gate.
+  const { Daemon } = await import("../index.js");
+
+  const home = await mkdtemp(join(tmpdir(), "pew2-plan-resume-"));
+  const previous = process.env.PEW2_HOME;
+  process.env.PEW2_HOME = home;
+
+  try {
+    const daemon = new Daemon({ id: "test", name: "test" }, true);
+    await daemon.refreshProviders();
+
+    try {
+      // First open: writes the transcript cache for next time.
+      const firstId = await daemon.resumeSession("echo", "echo_history_1", process.cwd());
+      await new Promise((r) => setTimeout(r, 300));
+      const firstSession = (daemon as any).sessions.get(firstId);
+      expect(
+        firstSession.log.events.some((e: any) => e.payload?.update?.sessionUpdate === "plan"),
+      ).toBe(true);
+    } finally {
+      daemon.closeAll();
+    }
+
+    // Second open: now there is a cached transcript, so `loadingDuplicateReplay`
+    // is true while the agent reconnects. The plan update must still land.
+    const daemon2 = new Daemon({ id: "test", name: "test" }, true);
+    await daemon2.refreshProviders();
+    try {
+      const secondId = await daemon2.resumeSession("echo", "echo_history_1", process.cwd());
+      await new Promise((r) => setTimeout(r, 300));
+      const secondSession = (daemon2 as any).sessions.get(secondId);
+      const events = secondSession.log.events as any[];
+      expect(events.some((e) => e.payload?.update?.sessionUpdate === "plan")).toBe(true);
+      // The fast-paint loader already injected the 3 cached `agent_message_chunk`
+      // entries (unfiltered, by design — that is the instant paint). What must
+      // be suppressed is the *live* agent resending that same chat text while
+      // reconnecting: this count must stay at exactly the cached amount, never
+      // double it. `plan`, in contrast, is real session state and is allowed to
+      // arrive twice (once from the cache, once live) — see the assertion above.
+      expect(
+        events.filter((e) => e.payload?.update?.sessionUpdate === "agent_message_chunk").length,
+      ).toBe(3);
+    } finally {
+      daemon2.closeAll();
+    }
+  } finally {
+    if (previous === undefined) delete process.env.PEW2_HOME;
+    else process.env.PEW2_HOME = previous;
+  }
+}, 60_000);
+
 test("a turned-off agent cannot be started by a client holding a stale list", async () => {
   // Filtering the announced list is not enough on its own. A phone that
   // connected before the agent was turned off still shows it, and tapping that

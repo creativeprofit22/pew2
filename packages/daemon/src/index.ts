@@ -796,8 +796,25 @@ export class Daemon {
     const agentCallbacks = {
       ...callbacks,
       onUpdate: (payload: unknown) => {
-        if (collectReplay && !session.live) replayed.push(payload);
-        if (!loadingDuplicateReplay) callbacks.onUpdate(payload);
+        // Stored bare — the same shape `loadClaudeDisplayHistory` and
+        // `loadGgCoderDisplayHistory` return — so the replay loop above can
+        // wrap every source the same way. `payload` here is the raw ACP
+        // `{ sessionId, update }` notification; only the inner `update` is
+        // what a resumed conversation needs to see again.
+        if (collectReplay && !session.live) {
+          replayed.push((payload as { update?: unknown } | undefined)?.update);
+        }
+        // The fast-paint loaders above only ever emit chat text, so that is
+        // all this gate may drop. Anything else the agent sends while
+        // connecting (a `plan`, a `tool_call`, `available_commands_update`...)
+        // carries live session state the fast paint never substituted for,
+        // and must reach the log or a resumed conversation loses it for good
+        // until the agent happens to resend it.
+        const kind = (payload as { update?: { sessionUpdate?: string } } | undefined)?.update
+          ?.sessionUpdate;
+        const isDuplicatedChatText =
+          kind === "user_message_chunk" || kind === "agent_message_chunk";
+        if (!loadingDuplicateReplay || !isDuplicatedChatText) callbacks.onUpdate(payload);
       },
     };
 

@@ -81,6 +81,43 @@ const configOptions = [
   },
 ];
 
+/**
+ * What `session/load` and `session/resume` both send back: the same chat
+ * history, then a `plan` update that is not chat text and must not be
+ * mistaken for it by anything replaying-but-suppressing this on reopen.
+ */
+async function replayHistory(ctx: any) {
+  const { sessionId } = ctx.params as { sessionId: string };
+  if (sessionId !== "echo_history_1") throw new Error(`Unknown session '${sessionId}'`);
+  const replay = [
+    ["user_message_chunk", "First question"],
+    ["agent_message_chunk", "First answer"],
+    ["user_message_chunk", "Second question"],
+    ["agent_message_chunk", "Second answer"],
+    ["user_message_chunk", "Third question"],
+    ["agent_message_chunk", "Third answer"],
+  ] as const;
+  for (const [sessionUpdate, text] of replay) {
+    await ctx.client.notify("session/update", {
+      sessionId,
+      update: { sessionUpdate, content: { type: "text", text } },
+    });
+  }
+  // Sent on every load, unlike the chat text above: a real agent reconstructs
+  // its plan state as part of `session/load`/`session/resume`, and none of
+  // the daemon's fast-paint loaders substitute for it. A daemon that
+  // suppresses it here as if it were duplicate chat text would lose the
+  // checklist for good on every reopen after the first.
+  await ctx.client.notify("session/update", {
+    sessionId,
+    update: {
+      sessionUpdate: "plan",
+      entries: [{ content: "Investigate the bug", priority: "high", status: "completed" }],
+    },
+  });
+  return { configOptions };
+}
+
 const app = agent({ name: "pew2-echo" })
   .onRequest("initialize", async () => ({
     protocolVersion: 1,
@@ -111,25 +148,12 @@ const app = agent({ name: "pew2-echo" })
       },
     ],
   }))
-  .onRequest("session/load", async (ctx: any) => {
-    const { sessionId } = ctx.params as { sessionId: string };
-    if (sessionId !== "echo_history_1") throw new Error(`Unknown session '${sessionId}'`);
-    const replay = [
-      ["user_message_chunk", "First question"],
-      ["agent_message_chunk", "First answer"],
-      ["user_message_chunk", "Second question"],
-      ["agent_message_chunk", "Second answer"],
-      ["user_message_chunk", "Third question"],
-      ["agent_message_chunk", "Third answer"],
-    ] as const;
-    for (const [sessionUpdate, text] of replay) {
-      await ctx.client.notify("session/update", {
-        sessionId,
-        update: { sessionUpdate, content: { type: "text", text } },
-      });
-    }
-    return { configOptions };
-  })
+  // Shared by `session/load` and `session/resume`: this fixture advertises
+  // `sessionCapabilities.resume`, so the daemon calls whichever fits the
+  // situation, and both must actually work or a resumed-with-cache open
+  // throws "Method not found" instead of exercising anything.
+  .onRequest("session/load", async (ctx: any) => replayHistory(ctx))
+  .onRequest("session/resume", async (ctx: any) => replayHistory(ctx))
   .onRequest("session/set_config_option", async (ctx: any) => {
     const { configId, value } = ctx.params as { configId: string; value: string };
     const option = configOptions.find((entry) => entry.id === configId);

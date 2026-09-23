@@ -26,6 +26,44 @@ test("a stored transcript comes back exactly as it went in", async () => {
   expect((back![0] as any).update.content.text).toBe("hello");
 });
 
+test("a round trip through the daemon's replay loop is single-nested, not double-wrapped", async () => {
+  // Regression for the shape bug: `index.ts` used to store the raw ACP
+  // notification (`{ sessionId, update }`) verbatim, then on replay wrapped
+  // it *again* as `{ sessionId: loadSessionId, update: <that whole thing> }`.
+  // The app's `readChunk`/`readPlan` read `payload.update.sessionUpdate` one
+  // level deep, so the double-wrapped shape silently painted nothing.
+  //
+  // The fix: only the inner `update` field is stored (mirroring what
+  // `loadClaudeDisplayHistory`/`loadGgCoderDisplayHistory` already return),
+  // so wrapping it once on replay reconstructs the original notification
+  // exactly.
+  const e = await env();
+  const original = {
+    sessionId: "agent-session-1",
+    update: {
+      sessionUpdate: "plan",
+      entries: [{ content: "do the thing", status: "pending" }],
+    },
+  };
+
+  // What the daemon's onUpdate collector now pushes: the inner field only.
+  await writeTranscript("opencode", "agent-session-1", [original.update], e);
+
+  const localUpdates = await readTranscript("opencode", "agent-session-1", e);
+  expect(localUpdates).toBeDefined();
+
+  // What the replay loop in `index.ts` hands to `callbacks.onUpdate`.
+  const replayedToApp = localUpdates!.map((update) => ({
+    sessionId: "agent-session-1",
+    update,
+  }));
+
+  expect(replayedToApp[0]).toEqual(original);
+  expect((replayedToApp[0] as any).update.sessionUpdate).toBe("plan");
+  // The bug's signature: an extra layer where `update.update` exists instead.
+  expect((replayedToApp[0] as any).update.update).toBeUndefined();
+});
+
 test("no cache is not an error, just a slower open", async () => {
   const e = await env();
   expect(await readTranscript("opencode", "never-seen", e)).toBeUndefined();
