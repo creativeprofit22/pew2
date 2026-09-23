@@ -186,6 +186,48 @@ test("a picture without words still becomes a turn", () => {
   expect(next.turns[0]!.images).toHaveLength(1);
 });
 
+test("replay restores the agent's last plan, and tool-call folding is unaffected", () => {
+  // The last plan is the session's current state, same reasoning as usage —
+  // and mixing a plan update into a batch with a tool call must not disturb
+  // that tool call's own folding.
+  const state = {
+    turns: [],
+    sessions: [],
+    busy: false,
+    plan: undefined as import("./plan").PlanStep[] | undefined,
+  };
+
+  const folded = foldSessionEvents(state, [
+    {
+      sessionId: "s1",
+      seq: 1,
+      payload: {
+        update: {
+          sessionUpdate: "plan",
+          entries: [
+            { content: "Read the config file", priority: "medium", status: "completed" },
+            { content: "Patch the parser", priority: "medium", status: "in_progress" },
+          ],
+        },
+      },
+    },
+    {
+      sessionId: "s1",
+      seq: 2,
+      payload: {
+        update: { sessionUpdate: "tool_call", toolCallId: "1", title: "Editing", kind: "edit", status: "in_progress" },
+      },
+    },
+  ]);
+
+  expect(folded.plan).toEqual([
+    { content: "Read the config file", status: "completed" },
+    { content: "Patch the parser", status: "in_progress" },
+  ]);
+  // Still history, so it must not look like a turn in progress.
+  expect(folded.busy).toBe(false);
+});
+
 test("replay restores the context percentage, unlike busy", () => {
   // The last reading is the session's current state, not a description of work
   // in progress: without this a reconnect blanks the meter until the agent

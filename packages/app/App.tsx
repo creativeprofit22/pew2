@@ -1367,6 +1367,7 @@ function Pew2({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void })
             threadBottom={threadBottom}
             working={working}
             activity={daemon.activity}
+            plan={daemon.plan}
             receipt={daemon.receipt}
             indicatorTop={insets.top + navHeight}
             indicatorBottom={dockHeight}

@@ -17,6 +17,19 @@ import { StatusBar } from "expo-status-bar";
 import { theme } from "../theme";
 import { ChatThread, type ChatThreadRef } from "./ChatThread";
 import type { Turn } from "../useDaemon";
+import type { PlanStep } from "../plan";
+
+// Exercises all three statuses, plus a step long enough to hit the card's
+// numberOfLines={2} truncation, so that clips visibly rather than silently.
+const SAMPLE_PLAN: PlanStep[] = [
+  { content: "Read the config file and locate the existing parser entry point", status: "completed" },
+  { content: "Patch the parser to handle the new field", status: "in_progress" },
+  {
+    content:
+      "Run the full test suite, confirm nothing regressed, and write up a short summary of the change for the PR description",
+    status: "pending",
+  },
+];
 
 const DOCK_HEIGHT = 120;
 const THREAD_TOP = 80;
@@ -66,6 +79,7 @@ export default function ChatThreadHarness() {
   const [count, setCount] = useState(12);
   const [failed, setFailed] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
+  const [showPlan, setShowPlan] = useState(true);
   const list = useRef<ChatThreadRef>(null);
   const turns = Array.from({ length: count }, (_, i) => turn(i + 1));
   // Second from the end, so it can be compared against a prose reply's action
@@ -89,6 +103,7 @@ export default function ChatThreadHarness() {
           onAtBottomChange={setAtBottom}
           onOpenThought={() => {}}
           onRetry={() => {}}
+          plan={showPlan ? SAMPLE_PLAN : undefined}
         />
 
         {/* Stand-in for the real dock: same job, obvious edge. Anything visible
@@ -104,6 +119,9 @@ export default function ChatThreadHarness() {
             </Pressable>
             <Pressable style={styles.button} onPress={() => setFailed((f) => !f)}>
               <Text style={styles.buttonText}>{failed ? "clear failure" : "fail last turn"}</Text>
+            </Pressable>
+            <Pressable style={styles.button} onPress={() => setShowPlan((p) => !p)}>
+              <Text style={styles.buttonText}>{showPlan ? "hide plan" : "show plan"}</Text>
             </Pressable>
             <Text style={styles.buttonText}>{atBottom ? "at bottom" : "scrolled up"}</Text>
           </View>

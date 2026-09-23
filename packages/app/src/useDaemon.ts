@@ -63,6 +63,7 @@ import {
 } from "./slashCommands";
 import type { WireProject } from "./projects";
 import { readUsage, type ContextUsage } from "./contextUsage";
+import { readPlan, type PlanStep } from "./plan";
 import {
   applyChunk,
   capTurns,
@@ -341,6 +342,17 @@ interface State {
    * with every prompt, so it is never a log — it is the present tense.
    */
   activity: Activity;
+  /**
+   * The agent's own to-do list for the open session, held until replaced.
+   *
+   * Only the open session, same scoping as `activity`: a background agent's
+   * plan is not what the reader is watching. Unlike `activity` it survives
+   * a finished turn — ACP's `plan` update is a multi-turn task list, not a
+   * per-turn artifact, so it is only ever replaced by a fresh `plan` update
+   * (including an empty one, which is the agent clearing it) or by switching
+   * sessions.
+   */
+  plan?: PlanStep[];
   /**
    * What the last turn did, shown once it is over and cleared when the next
    * one starts. Absent for a turn this client did not time itself.
@@ -1791,6 +1803,15 @@ export function useDaemon(
                 return { ...base, usage };
               }
 
+              // The agent's to-do list, held like `usage` and `commands`: it
+              // describes the session, not this turn, and is filtered to the
+              // session on screen for the same reason.
+              const plan = readPlan(payload);
+              if (plan) {
+                if (message.sessionId !== sessionRef.current) return base;
+                return { ...base, plan };
+              }
+
               const permission = readPermissionRequest(payload);
               if (permission) {
                 return {
@@ -2323,6 +2344,10 @@ export function useDaemon(
             // agent's window, and carrying it across would put the previous chat's
             // percentage beside this one's project.
             usage: undefined,
+            // Same reason as usage: belongs to the conversation being left, and
+            // a stale checklist from another project must not flash up before
+            // this one's own replay (if any) arrives.
+            plan: undefined,
             turns: [],
             configOptions: [],
             // Cleared so the previous conversation's menu is not offered for
@@ -2385,6 +2410,10 @@ export function useDaemon(
           // agent's window, and carrying it across would put the previous chat's
           // percentage beside this one's project.
           usage: undefined,
+          // Same reason as usage: belongs to the conversation being left, and a
+          // stale checklist from another project must not flash up before this
+          // one's own replay (if any) arrives.
+          plan: undefined,
           workspaceNonce: s.workspaceNonce + 1,
           turns: session.turns,
           configOptions: session.configOptions,
@@ -2497,6 +2526,10 @@ export function useDaemon(
           // agent's window, and carrying it across would put the previous chat's
           // percentage beside this one's project.
           usage: undefined,
+          // Same reason as usage: belongs to the conversation being left, and a
+          // stale checklist from another project must not flash up before this
+          // one's own replay (if any) arrives.
+          plan: undefined,
           turns: [],
           // Selectors belong to the old agent's session; keeping them would
           // show another agent's model name in the top bar. Its slash commands
@@ -2551,6 +2584,10 @@ export function useDaemon(
           // agent's window, and carrying it across would put the previous chat's
           // percentage beside this one's project.
           usage: undefined,
+          // Same reason as usage: belongs to the conversation being left, and a
+          // stale checklist from another project must not flash up before this
+          // one's own replay (if any) arrives.
+          plan: undefined,
           workspaceNonce: s.workspaceNonce + 1,
           turns: [],
           configOptions: [],

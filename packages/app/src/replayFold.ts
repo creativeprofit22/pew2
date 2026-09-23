@@ -13,6 +13,7 @@ import { foldActivity, IDLE_ACTIVITY, type Activity } from "./activity";
 import { isEmptyChunk, readChunk, type Chunk } from "./chunks";
 import { joinChunks } from "./chunkJoin";
 import { readUsage, type ContextUsage } from "./contextUsage";
+import { readPlan, type PlanStep } from "./plan";
 import { dedupeImages } from "./images";
 import { pendingPermission, readPermissionRequest } from "./permissions";
 import type { PermissionRequest, Session, Turn } from "./useDaemon";
@@ -141,6 +142,7 @@ interface FoldState {
   busy: boolean;
   permission?: unknown;
   usage?: ContextUsage;
+  plan?: PlanStep[];
 }
 
 /**
@@ -339,6 +341,11 @@ export function foldSessionEvents<S extends FoldState>(
   // reconnect until the agent happened to send another one — which, mid-
   // conversation, is the moment it is most worth knowing.
   let usage = prev.usage;
+  // Same reasoning as `usage`: the agent's to-do list is the session's
+  // current state, not a per-event description, so the last one seen in the
+  // batch is still true and is carried even when no event in this particular
+  // batch happens to include one.
+  let plan = prev.plan;
   // `busy` and `permission` are deliberately left alone. They describe a turn
   // in progress *now*: a replay is history, so its last chunk is not work
   // being done (a looping "working" indicator on every resumed thread) and a
@@ -353,6 +360,11 @@ export function foldSessionEvents<S extends FoldState>(
     const replayedUsage = readUsage(payload);
     if (replayedUsage) {
       usage = replayedUsage;
+      continue;
+    }
+    const replayedPlan = readPlan(payload);
+    if (replayedPlan) {
+      plan = replayedPlan;
       continue;
     }
     const chunk = readChunk(payload);
@@ -370,6 +382,7 @@ export function foldSessionEvents<S extends FoldState>(
     ...prev,
     turns,
     usage,
+    plan,
     sessions: prev.sessions.map((session) => byId.get(session.id) ?? session),
   };
 }

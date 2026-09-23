@@ -32,10 +32,12 @@ import { theme } from "../theme";
 import { Turn } from "./Turn";
 import { ActivityLine } from "./ActivityLine";
 import { TurnReceipt } from "./TurnReceipt";
+import { PlanChecklist } from "./PlanChecklist";
 import { useReducedMotion } from "./useReducedMotion";
 import { useAppActive } from "./useAppActive";
 import { useStatusRowHeight } from "./useStatusRowHeight";
 import { currentTool, type Activity, type TurnReceipt as Receipt } from "../activity";
+import type { PlanStep } from "../plan";
 import { retryTarget } from "../retryPrompt";
 import type { Turn as TurnData } from "../useDaemon";
 
@@ -54,6 +56,13 @@ type Props = {
    * what the receipt below is measured from.
    */
   activity: Activity;
+  /**
+   * The agent's own to-do list for this conversation, held until GG Coder
+   * replaces or clears it. Shown above the activity/receipt row, and unlike
+   * both of those, not cleared when the turn ends: it describes the whole
+   * job, not one exchange.
+   */
+  plan?: PlanStep[];
   /** The turn that just ended, shown until the next prompt starts one. */
   receipt?: Receipt;
   /** Insets so the scroll indicator stays inside the unobscured reading area. */
@@ -73,6 +82,7 @@ function ChatThreadView(
     threadBottom,
     working,
     activity,
+    plan,
     receipt,
     indicatorTop,
     indicatorBottom,
@@ -188,11 +198,24 @@ function ChatThreadView(
   // changing tool re-renders the same footer instead of remounting it — which
   // would restart the sheen mid-sweep and lose the crossfade between tools.
   const footer = useMemo(() => {
-    if (working) return currentTool(activity) ? <ActivityLine activity={activity} /> : <Working />;
+    const checklist = plan && plan.length > 0 ? <PlanChecklist steps={plan} /> : null;
+    if (working) {
+      return (
+        <>
+          {checklist}
+          {currentTool(activity) ? <ActivityLine activity={activity} /> : <Working />}
+        </>
+      );
+    }
     // Never absent: the footer's own style carries the bottom reading inset, and
     // FlashList only lays that out around a footer that exists.
-    return receipt ? <TurnReceipt receipt={receipt} /> : <SpacerOnly />;
-  }, [activity, receipt, working]);
+    return (
+      <>
+        {checklist}
+        {receipt ? <TurnReceipt receipt={receipt} /> : <SpacerOnly />}
+      </>
+    );
+  }, [activity, plan, receipt, working]);
 
   // The composer grows when it takes focus, and the dock it lives in is an
   // overlay pinned to the bottom edge — so it expands *upwards*, over the
